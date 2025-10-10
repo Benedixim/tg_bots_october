@@ -3,6 +3,10 @@ from telebot import types
 import sqlite3
 import matplotlib.pyplot as plt
 
+from flask import Flask
+import os
+import threading
+
 TOKEN = "8176791165:AAFeivYr8ipnSI0m0yZ8IlLrkCuYHPMbZ0k"
 bot = telebot.TeleBot(TOKEN)
 
@@ -140,5 +144,24 @@ def callback_graphbank(call):
     with open(file_path, "rb") as photo:
         bot.send_photo(call.message.chat.id, photo, caption="График партнеров по категориям для выбранного банка")
 
-if __name__ == "__main__":
-    bot.polling(none_stop=True, interval=0)
+# Добавьте Flask app для порта
+app = Flask(__name__)
+
+@app.route('/')
+def home():
+    return "Bot is running!"
+
+def run_flask():
+    app.run(host='0.0.0.0', port=5000)
+
+def run_bot():
+    bot.polling(none_stop=True)
+
+if __name__ == '__main__':
+    # Запускаем Flask в отдельном потоке
+    flask_thread = threading.Thread(target=run_flask)
+    flask_thread.daemon = True
+    flask_thread.start()
+    
+    # Запускаем бота
+    run_bot()
