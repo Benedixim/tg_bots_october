@@ -2,3 +2,5 @@ pytelebot
 matplotlib
 telebot
 flask
+asyncio
+ClientSession

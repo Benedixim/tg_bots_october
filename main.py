@@ -144,6 +144,60 @@ def callback_graphbank(call):
     with open(file_path, "rb") as photo:
         bot.send_photo(call.message.chat.id, photo, caption="График партнеров по категориям для выбранного банка")
 
+
+# === Поиск партнера по названию ===
+
+@bot.message_handler(commands=['search'])
+def search_command(message):
+    msg = bot.send_message(message.chat.id, "Введите имя партнёра для поиска:")
+    bot.register_next_step_handler(msg, perform_search)
+
+
+def perform_search(message):
+    query = message.text.strip().lower()
+    if not query:
+        bot.send_message(message.chat.id, "Пустой запрос. Введите имя снова командой /search.")
+        return
+
+    conn = sqlite3.connect("banks.db")
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT b.name as bank_name,
+               c.name as category_name,
+               p.partner_name,
+               p.partner_bonus,
+               p.partner_link
+        FROM partners p
+        JOIN banks b ON p.bank_id = b.id
+        JOIN categories c ON p.category_id = c.id
+        WHERE LOWER(p.partner_name) LIKE ?
+        AND p.checked_at = (
+            SELECT MAX(p2.checked_at)
+            FROM partners p2
+            WHERE p2.bank_id = p.bank_id AND p2.category_id = p.category_id
+        )
+        ORDER BY b.name, c.name, p.partner_name;
+    """, (f"%{query}%",))
+    results = cursor.fetchall()
+    conn.close()
+
+    if not results:
+        bot.send_message(message.chat.id, f"Ничего не найдено по запросу «{query}».")
+        return
+
+    # Формируем ответ
+    reply = f"🔎 Найдено совпадений: {len(results)}\n\n"
+    for bank_name, category_name, partner_name, bonus, link in results:
+        # Добавляем домен, если ссылка неполная
+        #if link and not link.startswith("http"):
+            #link = "https://www.alfabank.by" + link
+        bonus_display = bonus if bonus else "—"
+        reply += f"🏦 *{bank_name}* → _{category_name}_\n"
+        reply += f"[{partner_name}]({link}) — бонус: {bonus_display}\n\n"
+
+    bot.send_message(message.chat.id, reply, parse_mode="Markdown")
+
+
 # Добавьте Flask app для порта
 app = Flask(__name__)
 
@@ -156,6 +210,24 @@ def run_flask():
 
 def run_bot():
     bot.polling(none_stop=True)
+
+# ---------------- Keep Alive ----------------
+import asyncio
+from aiohttp import ClientSession
+
+async def keep_alive():
+    """Периодически пингует указанный URL каждые 5 минут"""
+    url = "https://tg-bots-october.onrender.com/"  # замени на свой адрес
+
+    while True:
+        try:
+            async with ClientSession() as session:
+                async with session.get(url) as resp:
+                    print(f"[KeepAlive] Ping {url} → {resp.status}")
+        except Exception as e:
+            print(f"[KeepAlive] Ошибка пинга: {e}")
+        await asyncio.sleep(300)  # 5 минут
+
 
 if __name__ == '__main__':
     # Запускаем Flask в отдельном потоке
