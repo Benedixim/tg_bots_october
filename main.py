@@ -186,16 +186,50 @@ def perform_search(message):
         return
 
     # Формируем ответ
-    reply = f"🔎 Найдено совпадений: {len(results)}\n\n"
-    for bank_name, category_name, partner_name, bonus, link in results:
+    #reply = f"🔎 Найдено совпадений: {len(results)}\n\n"
+    #for bank_name, category_name, partner_name, bonus, link in results:
         # Добавляем домен, если ссылка неполная
         #if link and not link.startswith("http"):
             #link = "https://www.alfabank.by" + link
-        bonus_display = bonus if bonus else "—"
-        reply += f"🏦 *{bank_name}* → _{category_name}_\n"
-        reply += f"[{partner_name}]({link}) — бонус: {bonus_display}\n\n"
+    #    bonus_display = bonus if bonus else "—"
+    #    reply += f"🏦 *{bank_name}* → _{category_name}_\n"
+    #    reply += f"[{partner_name}]({link}) — бонус: {bonus_display}\n\n"
 
-    bot.send_message(message.chat.id, reply, parse_mode="Markdown")
+    #bot.send_message(message.chat.id, reply, parse_mode="Markdown")
+    # === Группировка по банкам и категориям ===
+    grouped = defaultdict(lambda: defaultdict(list))
+
+    for bank_name, category_name, partner_name, bonus, link in results:
+        grouped[bank_name][category_name].append({
+            "name": partner_name,
+            "bonus": bonus,
+            "link": link
+        })
+
+    # === Формируем красивый ответ ===
+    reply_lines = [f"🔎 Найдено совпадений: {len(results)}\n"]
+
+    for bank, categories in grouped.items():
+        reply_lines.append(f"🏦 *{bank}*")
+
+        all_links = set()
+        for category, partners in categories.items():
+            reply_lines.append(f"  → _{category}_")
+            for p in partners:
+                all_links.add(p['link'])
+                bonus_display = p['bonus'] if p['bonus'] else "—"
+                reply_lines.append(f"    [{p['name']}]({p['link']}) — бонус: {bonus_display}")
+
+        # Уникальные ссылки банка
+        if all_links:
+            if len(all_links) == 1:
+                reply_lines.append(f"  🔗 {list(all_links)[0]}\n")
+            else:
+                reply_lines.append(f"  🔗 Ссылки банка: {', '.join(all_links)}\n")
+
+    reply_text = "\n".join(reply_lines)
+
+    bot.send_message(message.chat.id, reply_text, parse_mode="Markdown", disable_web_page_preview=True)
 
 
 # Добавьте Flask app для порта
@@ -234,6 +268,7 @@ if __name__ == '__main__':
     flask_thread = threading.Thread(target=run_flask)
     flask_thread.daemon = True
     flask_thread.start()
+    asyncio.run(keep_alive())
     
     # Запускаем бота
     run_bot()
