@@ -155,7 +155,7 @@ def search_command(message):
 
 
 def perform_search(message):
-    query = message.text.strip().lower()
+    query = message.text.strip()
     if not query:
         bot.send_message(message.chat.id, "Пустой запрос. Введите имя снова командой /search.")
         return
