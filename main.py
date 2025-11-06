@@ -249,6 +249,7 @@ def run_bot():
 # ---------------- Keep Alive ----------------
 import asyncio
 from aiohttp import ClientSession
+import threading
 
 async def keep_alive():
     """Периодически пингует указанный URL каждые 5 минут"""
@@ -263,13 +264,19 @@ async def keep_alive():
             print(f"[KeepAlive] Ошибка пинга: {e}")
         await asyncio.sleep(300)  # 5 минут
 
+def start_keep_alive():
+    asyncio.run(keep_alive())
 
 if __name__ == '__main__':
     # Запускаем Flask в отдельном потоке
     flask_thread = threading.Thread(target=run_flask)
     flask_thread.daemon = True
     flask_thread.start()
-    asyncio.run(keep_alive())
+    #asyncio.run(keep_alive())
     
+    # keep_alive — тоже в отдельном потоке
+    keepalive_thread = threading.Thread(target=start_keep_alive, daemon=True)
+    keepalive_thread.start()
+
     # Запускаем бота
     run_bot()
