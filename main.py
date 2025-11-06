@@ -172,7 +172,7 @@ def perform_search(message):
         FROM partners p
         JOIN banks b ON p.bank_id = b.id
         JOIN categories c ON p.category_id = c.id
-        WHERE p.partner_name LIKE ? COLLATE NOCASE
+        WHERE p.partner_name LIKE ?
         AND p.checked_at = (
             SELECT MAX(p2.checked_at)
             FROM partners p2
