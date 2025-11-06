@@ -218,10 +218,10 @@ def perform_search(message):
         all_links = set()
         for category, partners in categories.items():
             reply_lines.append(f"  → _{category}_")
-        reply_lines.append("\n")
+        #reply_lines.append("\n")
         for p in partners:
             #all_links.add(p['link'])
-            bonus_display = " - " + p['bonus'] + " " + p['bonus_unit'] + "\n" if p['bonus'] else "\n"
+            bonus_display = " - " + p['bonus'] + " " + p['bonus_unit'] if p['bonus'] else ""
             reply_lines.append(f"    [{p['name']}]({p['link']}){bonus_display}")
 
         # Уникальные ссылки банка
