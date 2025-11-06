@@ -221,7 +221,7 @@ def perform_search(message):
         for p in partners:
             #all_links.add(p['link'])
             bonus_display = " — бонус: " + p['bonus'] + p['bonus_unit'] if p['bonus'] else ""
-            reply_lines.append(f"    [{p['name']}]({p['link']})")# — бонус: {bonus_display}")
+            reply_lines.append(f"    [{p['name']}]({p['link']}){bonus_display}")
 
         # Уникальные ссылки банка
         #if all_links:
