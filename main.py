@@ -146,6 +146,7 @@ def callback_graphbank(call):
 
 
 # === Поиск партнера по названию ===
+from collections import defaultdict
 
 @bot.message_handler(commands=['search'])
 def search_command(message):

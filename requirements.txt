@@ -4,4 +4,4 @@ telebot
 flask
 asyncio
 aiohttp
-collections
+defaultdict
