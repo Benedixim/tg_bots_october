@@ -167,6 +167,7 @@ def perform_search(message):
                c.name as category_name,
                p.partner_name,
                p.partner_bonus,
+                b.bonus_unit,
                p.partner_link
         FROM partners p
         JOIN banks b ON p.bank_id = b.id
@@ -200,10 +201,11 @@ def perform_search(message):
     # === Группировка по банкам и категориям ===
     grouped = defaultdict(lambda: defaultdict(list))
 
-    for bank_name, category_name, partner_name, bonus, link in results:
+    for bank_name, category_name, partner_name, bonus, bonus_unit, link in results:
         grouped[bank_name][category_name].append({
             "name": partner_name,
             "bonus": bonus,
+            "bonus_unit": bonus_unit,
             "link": link
         })
 
@@ -216,17 +218,17 @@ def perform_search(message):
         all_links = set()
         for category, partners in categories.items():
             reply_lines.append(f"  → _{category}_")
-            for p in partners:
-                all_links.add(p['link'])
-                bonus_display = p['bonus'] if p['bonus'] else "—"
-                reply_lines.append(f"    [{p['name']}]({p['link']}) — бонус: {bonus_display}")
+        for p in partners:
+            #all_links.add(p['link'])
+            bonus_display = " — бонус: " + p['bonus'] + p['bonus_unit'] if p['bonus'] else ""
+            reply_lines.append(f"    [{p['name']}]({p['link']})")# — бонус: {bonus_display}")
 
         # Уникальные ссылки банка
-        if all_links:
-            if len(all_links) == 1:
-                reply_lines.append(f"  🔗 {list(all_links)[0]}\n")
-            else:
-                reply_lines.append(f"  🔗 Ссылки банка: {', '.join(all_links)}\n")
+        #if all_links:
+        #    if len(all_links) == 1:
+        #        reply_lines.append(f"  🔗 {list(all_links)[0]}\n")
+        #    else:
+        #        reply_lines.append(f"  🔗 Ссылки банка: {', '.join(all_links)}\n")
 
     reply_text = "\n".join(reply_lines)
 
