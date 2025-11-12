@@ -186,6 +186,49 @@ def nightly_scrape_loop():
         except Exception as e:
             print(f"[{dt.datetime.now():%Y-%m-%d %H:%M:%S}] ❌ Nightly update error: {e}")
 
+# секрет можно переопределить через переменную окружения UPDATE_SECRET
+UPDATE_SECRET = os.getenv("UPDATE_SECRET", "qwerty11")
+_update_lock = threading.Lock()
+_update_running = False
+
+def _run_manual_update(chat_id: int):
+    global _update_running
+    try:
+        bot.send_message(chat_id, "🔄 Запускаю ручное обновление категорий и партнёров…")
+        update_all_banks_categories()
+        bot.send_message(chat_id, "✅ Готово: ручное обновление завершено.")
+    except Exception as e:
+        bot.send_message(chat_id, f"❌ Ошибка при ручном обновлении: {e}")
+    finally:
+        _update_running = False
+        try:
+            _update_lock.release()
+        except RuntimeError:
+            pass
+
+@bot.message_handler(commands=['update'])
+def update_command(message):
+    global _update_running
+    # ожидаем формат: "/update <secret>"
+    parts = message.text.strip().split(maxsplit=1)
+    if len(parts) < 2 or parts[1].strip() != UPDATE_SECRET:
+        bot.send_message(message.chat.id, "⛔️ Неверный секрет. Формат: /update <secret>")
+        return
+
+    # защита от параллельных запусков
+    if _update_running:
+        bot.send_message(message.chat.id, "⏳ Обновление уже выполняется. Дождитесь завершения.")
+        return
+
+    # пытаемся захватить лок (на случай гонок)
+    if not _update_lock.acquire(blocking=False):
+        bot.send_message(message.chat.id, "⏳ Обновление уже выполняется. Дождитесь завершения.")
+        return
+
+    _update_running = True
+    threading.Thread(target=_run_manual_update, args=(message.chat.id,), daemon=True).start()
+
+
 
 # ---------- KeepAlive + Flask ----------
 app = Flask(__name__)
