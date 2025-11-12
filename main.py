@@ -25,7 +25,7 @@ from updates import update_all_banks_categories
 
 
 # ---------- Telegram Bot ----------
-TOKEN = os.getenv("TELEGRAM_TOKEN", "8176791165:AAFeivYr8ipnSI0m0yZ8IlLrkCuYHPMbZ0k")
+TOKEN = os.getenv("TELEGRAM_TOKEN", "8217717739:AAG2XMv-sKCFPi3FywLXZ1EDd_tw8HRVmfg")
 bot = telebot.TeleBot(TOKEN)
 
 
