@@ -1,152 +1,130 @@
-import telebot
-from telebot import types
+# main.py
+import os
+import time
+import threading
+import datetime as dt
+from collections import defaultdict
+
 import sqlite3
 import matplotlib.pyplot as plt
-
 from flask import Flask
-import os
-import threading
+import asyncio
+from aiohttp import ClientSession
 
-TOKEN = "8176791165:AAFeivYr8ipnSI0m0yZ8IlLrkCuYHPMbZ0k"
+import telebot
+from telebot import types
+
+from db_sql import (
+    get_banks,
+    get_latest_categories_by_bank,
+    get_partners_latest_by_bank_category,
+    search_partners_latest,
+    get_partner_counts_by_bank,
+)
+from updates import update_all_banks_categories
+
+
+# ---------- Telegram Bot ----------
+TOKEN = os.getenv("TELEGRAM_TOKEN", "8176791165:AAFeivYr8ipnSI0m0yZ8IlLrkCuYHPMbZ0k")
 bot = telebot.TeleBot(TOKEN)
 
-def get_banks_from_db():
-    conn = sqlite3.connect("banks.db")
-    cursor = conn.cursor()
-    cursor.execute("SELECT id, name, loyalty_url FROM banks ORDER BY name;")
-    banks = cursor.fetchall()
-    conn.close()
-    return banks  # [(id, name, loyalty_url), ...]
 
-def get_categories_by_bank(bank_id):
-    conn = sqlite3.connect("banks.db")
-    cursor = conn.cursor()
-    cursor.execute("""
-        SELECT c.id, c.name, c.url
-        FROM categories c
-        INNER JOIN (
-            SELECT name, MAX(checked_at) as max_checked
-            FROM categories
-            WHERE bank_id = ?
-            GROUP BY name
-        ) sub ON c.name = sub.name AND c.checked_at = sub.max_checked
-        WHERE c.bank_id = ?
-        ORDER BY c.name;
-    """, (bank_id, bank_id))
-    categories = cursor.fetchall()
-    conn.close()
-    return categories  # [(id, name, url), ...]
-
-def get_partners_by_bank_category(bank_id, category_id):
-    conn = sqlite3.connect("banks.db")
-    cursor = conn.cursor()
-    cursor.execute("""
-        SELECT partner_name, partner_bonus, partner_link
-        FROM partners
-        WHERE bank_id = ? AND category_id = ?
-        AND checked_at = (SELECT MAX(checked_at) FROM partners p2 WHERE p2.bank_id=? AND p2.category_id=?)
-        ORDER BY partner_name;
-    """, (bank_id, category_id, bank_id, category_id))
-    partners = cursor.fetchall()
-    conn.close()
-    return partners
-
-def plot_partners_by_bank(bank_id):
-    conn = sqlite3.connect("banks.db")
-    cursor = conn.cursor()
-    cursor.execute("""
-        SELECT c.name, COUNT(p.partner_name)
-        FROM categories c
-        LEFT JOIN partners p ON c.id = p.category_id AND p.bank_id = ?
-        WHERE c.bank_id = ?
-        GROUP BY c.name
-        ORDER BY c.name;
-    """, (bank_id, bank_id))
-    data = cursor.fetchall()
-    conn.close()
+# ---------- Plot ----------
+def plot_partners_by_bank(bank_id: int) -> str:
+    data = get_partner_counts_by_bank(bank_id)
     categories = [row[0] for row in data]
     counts = [row[1] for row in data]
-    
-    plt.figure(figsize=(12, 6))  # увеличьте ширину графика
-    plt.bar(categories, counts, color="skyblue")
+
+    plt.figure(figsize=(12, 6))
+    bars = plt.bar(categories, counts)
     plt.xlabel("Категории")
     plt.ylabel("Количество партнеров")
     plt.title("Партнеры по категориям")
     plt.grid(axis="y", linestyle="--", alpha=0.7)
-    plt.xticks(rotation=45, ha='right', fontsize=10)  # Повернуть и уменьшить подписи!
-    plt.tight_layout()  # чтобы подписи не выходили за пределы холста
-    plt.savefig("partners_chart.png")
+    plt.xticks(rotation=45, ha='right', fontsize=10)
+    plt.tight_layout()
+    for bar, value in zip(bars, counts):
+        h = bar.get_height()
+        plt.text(bar.get_x() + bar.get_width() / 2, h, f"{int(value)}", ha="center", va="bottom", fontsize=9)
+    out = "partners_chart.png"
+    plt.savefig(out)
     plt.close()
+    return out
 
-    return "partners_chart.png"
 
+# ---------- Bot Handlers ----------
 @bot.message_handler(commands=['start'])
 def start_message(message):
-    banks = get_banks_from_db()
+    banks = get_banks()
+    if not banks:
+        bot.send_message(message.chat.id, "Банки не найдены.")
+        return
     markup = types.InlineKeyboardMarkup(row_width=1)
     for bank_id, name, loyalty_url in banks:
         markup.add(types.InlineKeyboardButton(name, callback_data=f"bank_{bank_id}"))
     bot.send_message(message.chat.id, "Выберите банк:", reply_markup=markup)
 
+
 @bot.callback_query_handler(func=lambda call: call.data.startswith('bank_'))
 def callback_bank(call):
     bank_id = int(call.data[5:])
-    banks = get_banks_from_db()
-    selected_bank = next((b for b in banks if b[0] == bank_id), None)
-    if selected_bank:
-        name, loyalty_url = selected_bank[1], selected_bank[2]
-        bot.send_message(call.message.chat.id, f"Ссылка на программу лояльности: {loyalty_url}")
+    banks = get_banks()
+    selected = next((b for b in banks if b[0] == bank_id), None)
+    if selected:
+        name, loyalty_url = selected[1], selected[2]
+        if loyalty_url:
+            bot.send_message(call.message.chat.id, f"Ссылка на программу лояльности: {loyalty_url}")
 
-    categories = get_categories_by_bank(bank_id)
+    categories = get_latest_categories_by_bank(bank_id)
     if not categories:
         bot.send_message(call.message.chat.id, "Нет категорий у данного банка.")
         return
+
     markup = types.InlineKeyboardMarkup(row_width=1)
     for cat_id, cat_name, cat_url in categories:
         markup.add(types.InlineKeyboardButton(cat_name, callback_data=f"cat_{bank_id}_{cat_id}"))
     bot.send_message(call.message.chat.id, "Выберите категорию партнёра:", reply_markup=markup)
 
+
 @bot.callback_query_handler(func=lambda call: call.data.startswith('cat_'))
 def callback_category(call):
     _, bank_id, cat_id = call.data.split('_', 2)
-    partners = get_partners_by_bank_category(int(bank_id), int(cat_id))
+    partners = get_partners_latest_by_bank_category(int(bank_id), int(cat_id))
     if not partners:
         bot.send_message(call.message.chat.id, "Нет партнёров для этой категории.")
         return
-    #reply = "Партнёры данной категории:\n"
-    #for name, bonus, link in partners:
-    #    reply += f"- {name} | Бонус: {bonus if bonus else '—'} | Ссылка: {link}\n"
-    #bot.send_message(call.message.chat.id, reply)
-    
+
     reply = "Партнёры данной категории:\n\n"
     for name, bonus, link in partners:
-        # Если ссылка не полная, добавляем базовую часть
-        if not link.startswith("http"):
-            link = "https://www.alfabank.by" + link
-        # Формируем строку с markdown-ссылкой
-        reply += f"- [{name}]({link}) — бонус: {bonus if bonus else '—'}\n"
-    
-    bot.send_message(call.message.chat.id, reply, parse_mode='Markdown')
+        if link and not link.startswith("http"):
+            # если понадобится, можно хранить домен в banks и добавлять его тут
+            pass
+        bonus_display = bonus if bonus else "—"
+        shown_link = link if link else "#"
+        reply += f"- [{name}]({shown_link}) — бонус: {bonus_display}\n"
 
-# === ДОБАВЛЯЕМ КОМАНДУ ДЛЯ ОТКРЫТИЯ MINI APP с графиками ===
+    bot.send_message(call.message.chat.id, reply, parse_mode='Markdown', disable_web_page_preview=True)
+
+
 @bot.message_handler(commands=['graph'])
 def graph_start(message):
-    banks = get_banks_from_db()
+    banks = get_banks()
+    if not banks:
+        bot.send_message(message.chat.id, "Банки не найдены.")
+        return
     markup = types.InlineKeyboardMarkup(row_width=1)
     for bank_id, name, loyalty_url in banks:
         markup.add(types.InlineKeyboardButton(name, callback_data=f"graphbank_{bank_id}"))
     bot.send_message(message.chat.id, "Выберите банк для графика:", reply_markup=markup)
+
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('graphbank_'))
 def callback_graphbank(call):
     bank_id = int(call.data.split('_')[1])
     file_path = plot_partners_by_bank(bank_id)
     with open(file_path, "rb") as photo:
-        bot.send_photo(call.message.chat.id, photo, caption="График партнеров по категориям для выбранного банка")
+        bot.send_photo(call.message.chat.id, photo, caption="График партнёров по категориям")
 
-
-# === Поиск партнера по названию ===
-from collections import defaultdict
 
 @bot.message_handler(commands=['search'])
 def search_command(message):
@@ -160,126 +138,93 @@ def perform_search(message):
         bot.send_message(message.chat.id, "Пустой запрос. Введите имя снова командой /search.")
         return
 
-    conn = sqlite3.connect("banks.db")
-    cursor = conn.cursor()
-    cursor.execute("""
-        SELECT b.name as bank_name,
-               c.name as category_name,
-               p.partner_name,
-               p.partner_bonus,
-                b.bonus_unit,
-               p.partner_link
-        FROM partners p
-        JOIN banks b ON p.bank_id = b.id
-        JOIN categories c ON p.category_id = c.id
-        WHERE p.partner_name LIKE ?
-        AND p.checked_at = (
-            SELECT MAX(p2.checked_at)
-            FROM partners p2
-            WHERE p2.bank_id = p.bank_id AND p2.category_id = p.category_id
-        )
-        ORDER BY b.name, c.name, p.partner_name;
-    """, (f"%{query}%",))
-    results = cursor.fetchall()
-    conn.close()
-
+    results = search_partners_latest(query)
     if not results:
         bot.send_message(message.chat.id, f"Ничего не найдено по запросу «{query}».")
         return
 
-    # Формируем ответ
-    #reply = f"🔎 Найдено совпадений: {len(results)}\n\n"
-    #for bank_name, category_name, partner_name, bonus, link in results:
-        # Добавляем домен, если ссылка неполная
-        #if link and not link.startswith("http"):
-            #link = "https://www.alfabank.by" + link
-    #    bonus_display = bonus if bonus else "—"
-    #    reply += f"🏦 *{bank_name}* → _{category_name}_\n"
-    #    reply += f"[{partner_name}]({link}) — бонус: {bonus_display}\n\n"
-
-    #bot.send_message(message.chat.id, reply, parse_mode="Markdown")
-    # === Группировка по банкам и категориям ===
+    # grouped[bank][category] = list(partners)
     grouped = defaultdict(lambda: defaultdict(list))
-
     for bank_name, category_name, partner_name, bonus, bonus_unit, link in results:
         grouped[bank_name][category_name].append({
             "name": partner_name,
             "bonus": bonus,
             "bonus_unit": bonus_unit,
-            "link": link
+            "link": link or "#",
         })
 
-    # === Формируем красивый ответ ===
-    reply_lines = [f"🔎 Найдено совпадений: {len(results)}"]
+    lines = [f"🔎 Найдено совпадений: {len(results)}"]
+    for bank, cats in grouped.items():
+        lines.append(f"\n🏦 *{bank}*")
+        for category, partners in cats.items():
+            lines.append(f"  → _{category}_")
+            for p in partners:
+                bonus_disp = f" — {p['bonus']} {p['bonus_unit']}".strip() if p['bonus'] else ""
+                lines.append(f"    [{p['name']}]({p['link']}){bonus_disp}")
 
-    for bank, categories in grouped.items():
-        reply_lines.append(f"\n\n🏦 *{bank}*\n")
-
-        all_links = set()
-        for category, partners in categories.items():
-            reply_lines.append(f"  → _{category}_")
-        #reply_lines.append("\n")
-        for p in partners:
-            #all_links.add(p['link'])
-            bonus_display = " - " + p['bonus'] + " " + p['bonus_unit'] if p['bonus'] else ""
-            reply_lines.append(f"    [{p['name']}]({p['link']}){bonus_display}")
-
-        # Уникальные ссылки банка
-        #if all_links:
-        #    if len(all_links) == 1:
-        #        reply_lines.append(f"  🔗 {list(all_links)[0]}\n")
-        #    else:
-        #        reply_lines.append(f"  🔗 Ссылки банка: {', '.join(all_links)}\n")
-
-    reply_text = "\n".join(reply_lines)
-
-    bot.send_message(message.chat.id, reply_text, parse_mode="Markdown", disable_web_page_preview=True)
+    bot.send_message(message.chat.id, "\n".join(lines), parse_mode="Markdown", disable_web_page_preview=True)
 
 
-# Добавьте Flask app для порта
+# ---------- Nightly Scheduler (01:00) ----------
+def _seconds_until_next_1am(now: dt.datetime | None = None) -> int:
+    now = now or dt.datetime.now()
+    target_date = now.date()
+    if now.hour >= 1:
+        target_date = target_date + dt.timedelta(days=1)
+    target_dt = dt.datetime.combine(target_date, dt.time(1, 0, 0))
+    return max(1, int((target_dt - now).total_seconds()))
+
+
+def nightly_scrape_loop():
+    while True:
+        wait_s = _seconds_until_next_1am()
+        time.sleep(wait_s)
+        try:
+            print(f"[{dt.datetime.now():%Y-%m-%d %H:%M:%S}] ▶️ Nightly categories update")
+            update_all_banks_categories()
+            print(f"[{dt.datetime.now():%Y-%m-%d %H:%M:%S}] ✅ Nightly update done")
+        except Exception as e:
+            print(f"[{dt.datetime.now():%Y-%m-%d %H:%M:%S}] ❌ Nightly update error: {e}")
+
+
+# ---------- KeepAlive + Flask ----------
 app = Flask(__name__)
 
-@app.route('/')
+@app.route("/")
 def home():
     return "Bot is running!"
 
-def run_flask():
-    app.run(host='0.0.0.0', port=5000)
-
-def run_bot():
-    bot.polling(none_stop=True)
-
-# ---------------- Keep Alive ----------------
-import asyncio
-from aiohttp import ClientSession
-import threading
 
 async def keep_alive():
-    """Периодически пингует указанный URL каждые 5 минут"""
-    url = "https://tg-bots-october.onrender.com/"  # замени на свой адрес
-
+    url = os.getenv("KEEPALIVE_URL", "https://tg-bots-october.onrender.com/")
     while True:
         try:
             async with ClientSession() as session:
                 async with session.get(url) as resp:
                     print(f"[KeepAlive] Ping {url} → {resp.status}")
         except Exception as e:
-            print(f"[KeepAlive] Ошибка пинга: {e}")
-        await asyncio.sleep(300)  # 5 минут
+            print(f"[KeepAlive] Error: {e}")
+        await asyncio.sleep(300)
+
 
 def start_keep_alive():
     asyncio.run(keep_alive())
 
-if __name__ == '__main__':
-    # Запускаем Flask в отдельном потоке
-    flask_thread = threading.Thread(target=run_flask)
-    flask_thread.daemon = True
-    flask_thread.start()
-    #asyncio.run(keep_alive())
-    
-    # keep_alive — тоже в отдельном потоке
-    keepalive_thread = threading.Thread(target=start_keep_alive, daemon=True)
-    keepalive_thread.start()
 
-    # Запускаем бота
+def run_flask():
+    app.run(host="0.0.0.0", port=int(os.getenv("PORT", "5000")))
+
+
+def run_bot():
+    bot.polling(none_stop=True)
+
+
+if __name__ == "__main__":
+    # Flask
+    threading.Thread(target=run_flask, daemon=True).start()
+    # KeepAlive
+    threading.Thread(target=start_keep_alive, daemon=True).start()
+    # Nightly scraper
+    threading.Thread(target=nightly_scrape_loop, daemon=True).start()
+    # Bot
     run_bot()
