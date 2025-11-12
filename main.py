@@ -20,6 +20,8 @@ from db_sql import (
     get_partners_latest_by_bank_category,
     search_partners_latest,
     get_partner_counts_by_bank,
+    get_bank_name,  
+    backup_database,   # <— НОВОЕ
 )
 from updates import update_all_banks_categories
 
@@ -31,6 +33,7 @@ bot = telebot.TeleBot(TOKEN)
 
 # ---------- Plot ----------
 def plot_partners_by_bank(bank_id: int) -> str:
+    bank_name = get_bank_name(bank_id)
     data = get_partner_counts_by_bank(bank_id)
     categories = [row[0] for row in data]
     counts = [row[1] for row in data]
@@ -38,15 +41,20 @@ def plot_partners_by_bank(bank_id: int) -> str:
     plt.figure(figsize=(12, 6))
     bars = plt.bar(categories, counts)
     plt.xlabel("Категории")
-    plt.ylabel("Количество партнеров")
-    plt.title("Партнеры по категориям")
+    plt.ylabel("Количество партнёров")
+    plt.title(f"Партнёры по категориям — {bank_name}")  # ← название банка в заголовке
     plt.grid(axis="y", linestyle="--", alpha=0.7)
     plt.xticks(rotation=45, ha='right', fontsize=10)
     plt.tight_layout()
+
+    # подписи над столбцами
     for bar, value in zip(bars, counts):
         h = bar.get_height()
         plt.text(bar.get_x() + bar.get_width() / 2, h, f"{int(value)}", ha="center", va="bottom", fontsize=9)
-    out = "partners_chart.png"
+
+    # уникальное имя файла
+    safe_name = "".join(ch for ch in bank_name if ch.isalnum() or ch in ("_", "-")).strip("_-")
+    out = f"partners_chart_{bank_id}_{safe_name}.png"
     plt.savefig(out)
     plt.close()
     return out
@@ -121,9 +129,14 @@ def graph_start(message):
 @bot.callback_query_handler(func=lambda call: call.data.startswith('graphbank_'))
 def callback_graphbank(call):
     bank_id = int(call.data.split('_')[1])
+    bank_name = get_bank_name(bank_id)
     file_path = plot_partners_by_bank(bank_id)
     with open(file_path, "rb") as photo:
-        bot.send_photo(call.message.chat.id, photo, caption="График партнёров по категориям")
+        bot.send_photo(
+            call.message.chat.id,
+            photo,
+            caption=f"График партнёров по категориям — {bank_name}"  # ← подпись с названием банка
+        )
 
 
 @bot.message_handler(commands=['search'])
@@ -191,12 +204,42 @@ UPDATE_SECRET = os.getenv("UPDATE_SECRET", "qwerty11")
 _update_lock = threading.Lock()
 _update_running = False
 
-def _run_manual_update(chat_id: int):
+def _run_manual_update_with_progress(chat_id: int):
     global _update_running
     try:
-        bot.send_message(chat_id, "🔄 Запускаю ручное обновление категорий и партнёров…")
-        update_all_banks_categories()
-        bot.send_message(chat_id, "✅ Готово: ручное обновление завершено.")
+        # 1) Отправляем стартовое сообщение
+        msg = bot.send_message(chat_id, "🔄 Запускаю ручное обновление…")
+
+        # 2) Локальная функция для обновления прогресса
+        def tg_progress(done: int, total: int, note: str):
+            # защита от деления на ноль
+            total = max(1, total)
+            pct = int(done * 100 / total)
+            width = 20  # ширина «полосы»
+            filled = int(width * pct / 100)
+            bar = "▓" * filled + "░" * (width - filled)
+            text = (
+                f"🔄 Обновление категорий и партнёров\n"
+                f"[{bar}] {pct}% ({done}/{total})\n"
+                f"{note}"
+            )
+            try:
+                bot.edit_message_text(
+                    chat_id=chat_id,
+                    message_id=msg.message_id,
+                    text=text
+                )
+            except Exception:
+                # редактирование может падать при частых апдейтах — игнорируем
+                pass
+
+        # 3) Запуск обновления с прогрессом
+        tg_progress(0, 1, "Подготовка…")
+        update_all_banks_categories(progress=tg_progress)
+
+        # 4) Финальный штрих
+        tg_progress(1, 1, "Готово ✅")
+        bot.send_message(chat_id, "✅ Ручное обновление завершено.")
     except Exception as e:
         bot.send_message(chat_id, f"❌ Ошибка при ручном обновлении: {e}")
     finally:
@@ -209,25 +252,54 @@ def _run_manual_update(chat_id: int):
 @bot.message_handler(commands=['update'])
 def update_command(message):
     global _update_running
-    # ожидаем формат: "/update <secret>"
     parts = message.text.strip().split(maxsplit=1)
     if len(parts) < 2 or parts[1].strip() != UPDATE_SECRET:
         bot.send_message(message.chat.id, "⛔️ Неверный секрет. Формат: /update <secret>")
         return
 
-    # защита от параллельных запусков
     if _update_running:
         bot.send_message(message.chat.id, "⏳ Обновление уже выполняется. Дождитесь завершения.")
         return
 
-    # пытаемся захватить лок (на случай гонок)
     if not _update_lock.acquire(blocking=False):
         bot.send_message(message.chat.id, "⏳ Обновление уже выполняется. Дождитесь завершения.")
         return
 
     _update_running = True
-    threading.Thread(target=_run_manual_update, args=(message.chat.id,), daemon=True).start()
+    threading.Thread(
+        target=_run_manual_update_with_progress,
+        args=(message.chat.id,),
+        daemon=True
+    ).start()
 
+
+#------------- Скачивание БД --------------
+
+# --- Secure DB download (/db, /dump, /downloaddb) ---
+DB_DOWNLOAD_SECRET = os.getenv("DB_DOWNLOAD_SECRET", "qwerty11")
+
+def _send_db_backup(chat_id: int):
+    try:
+        bot.send_message(chat_id, "📦 Готовлю резервную копию базы…")
+        backup_path = backup_database(dest_dir=".")
+        caption = f"Резервная копия базы данных: {os.path.basename(backup_path)}"
+        with open(backup_path, "rb") as f:
+            bot.send_document(chat_id, f, caption=caption)
+        # при желании можно удалять временный файл:
+        # os.remove(backup_path)
+    except Exception as e:
+        bot.send_message(chat_id, f"❌ Ошибка при подготовке бэкапа: {e}")
+
+@bot.message_handler(commands=['db', 'dump', 'downloaddb'])
+def download_db_command(message):
+    # ожидаем формат: "/db <secret>"
+    parts = message.text.strip().split(maxsplit=1)
+    if len(parts) < 2 or parts[1].strip() != DB_DOWNLOAD_SECRET:
+        bot.send_message(message.chat.id, "⛔️ Неверный секрет. Формат: /db <secret>")
+        return
+
+    # делаем бэкап и отправляем его в отдельном потоке, чтобы не блокировать бота
+    threading.Thread(target=_send_db_backup, args=(message.chat.id,), daemon=True).start()
 
 
 # ---------- KeepAlive + Flask ----------

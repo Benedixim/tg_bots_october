@@ -1,4 +1,5 @@
 # db_sql.py
+import os
 import sqlite3
 import datetime
 from typing import Any, Dict, List, Tuple, Optional
@@ -283,3 +284,40 @@ def get_partner_counts_by_bank(bank_id: int) -> List[Tuple[str, int]]:
         return cur.fetchall()
     finally:
         conn.close()
+
+def get_bank_name(bank_id: int) -> str:
+    conn = _conn()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT name FROM banks WHERE id=?;", (bank_id,))
+        row = cur.fetchone()
+        return row[0] if row else f"bank_id={bank_id}"
+    finally:
+        conn.close()
+
+def backup_database(dest_dir: str = ".", filename: str | None = None) -> str:
+    """
+    Делает безопасную копию banks.db и возвращает путь к файлу.
+    Используется SQLite backup API (безопасно при WAL).
+    """
+    ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    out_name = filename or f"banks_backup_{ts}.db"
+    out_path = os.path.join(dest_dir, out_name)
+
+    src = _conn()
+    try:
+        # сбрасываем WAL перед копированием, если включён
+        try:
+            src.execute("PRAGMA wal_checkpoint(TRUNCATE);")
+        except Exception:
+            pass
+
+        dst = sqlite3.connect(out_path)
+        try:
+            src.backup(dst)  # атомарная копия
+        finally:
+            dst.close()
+    finally:
+        src.close()
+
+    return out_path

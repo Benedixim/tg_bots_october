@@ -25,11 +25,16 @@ from db_sql import (
 
 def _driver() -> webdriver.Chrome:
     opts = Options()
+    # не ждём полной загрузки документа
+    opts.page_load_strategy = 'none'
     opts.add_argument("--headless=new")
     opts.add_argument("--no-sandbox")
     opts.add_argument("--disable-dev-shm-usage")
     opts.add_argument("--window-size=1920,1080")
-    return webdriver.Chrome(options=opts)
+    drv = webdriver.Chrome(options=opts)
+    # «жёсткий» таймаут для загрузки
+    drv.set_page_load_timeout(10)
+    return drv
 
 
 def _click_cookie(driver: webdriver.Chrome, cookie_text: str) -> None:
@@ -174,9 +179,29 @@ def _parse_partners(driver: webdriver.Chrome, base_url: str, bank_id: int, categ
     return result
 
 
-def update_all_banks_categories() -> None:
-    for bank_id in get_all_bank_ids():
+def update_all_banks_categories(progress=None) -> None:
+    """
+    Обходит все банки и запускает парсинг.
+    Если передан progress(done, total, note), будет вызывать его между шагами.
+    """
+    bank_ids = get_all_bank_ids()
+    total = len(bank_ids)
+    if total == 0:
+        if progress:
+            progress(1, 1, "В таблице banks нет записей")
+        return
+
+    done = 0
+    for bank_id in bank_ids:
+        # старт банка
+        if progress:
+            progress(done, total, f"Старт bank_id={bank_id}")
         try:
             fetch_categories_for_bank(bank_id)
+            done += 1
+            if progress:
+                progress(done, total, f"Готово bank_id={bank_id}")
         except Exception as e:
-            print(f"[SCRAPER] bank_id={bank_id} error: {e}")
+            done += 1
+            if progress:
+                progress(done, total, f"Ошибка bank_id={bank_id}: {e}")
