@@ -1,4 +1,5 @@
 # category_scraper.py (update.py)
+import traceback
 import time
 from typing import Dict, Any, List, Callable, Optional
 from urllib.parse import urljoin
@@ -152,10 +153,12 @@ def fetch_categories_for_bank(
                 except (ElementClickInterceptedException, StaleElementReferenceException):
                     driver.execute_script("arguments[0].click();", label)
             except Exception as e:
-                msg = f"{cat_prefix} ❌ Ошибка при клике по категории: {e}"
+                done += 1
+                tb = traceback.format_exc()
+                msg = f"[bank {bank_id}] ❌ Ошибка на уровне банка: {e}\n{tb}"
                 print(msg)
                 if progress:
-                    progress(banks_done, banks_total, msg)
+                    progress(done, total, msg)
                 continue
 
             # ждём, пока изменится URL (если меняется)
