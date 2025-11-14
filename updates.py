@@ -396,6 +396,19 @@ def _parse_partners(
 
 
 def update_all_banks_categories(progress: ProgressFn = None) -> None:
+
+
+    opts = Options()
+    opts.add_argument("--headless=new")
+    opts.add_argument("--no-sandbox")
+    opts.add_argument("--disable-dev-shm-usage")
+    opts.add_argument("--window-size=1920,1080")
+
+    driver = webdriver.Chrome(options=opts)
+    driver.get("https://www.google.com")
+    print(driver.title)
+    driver.quit()
+
     # """
     # Обходит все банки и запускает парсинг.
     # Если передан progress(done, total, note), будет вызывать его:
