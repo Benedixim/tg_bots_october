@@ -451,12 +451,18 @@ def fetch_categories(bank_id):
     print(url)
 
 
-    driver = webdriver.Chrome()
+    driver = _driver()
     try:
-        driver.maximize_window()
-    except:
-        driver.set_window_size(1920, 1080)
-    driver.get(url)
+        # в headless режиме maximize_window может падать, поэтому можно вообще не вызывать
+        # try:
+        #     driver.maximize_window()
+        # except Exception:
+        #     driver.set_window_size(1920, 1080)
+
+        driver.get(url)
+        ...
+    finally:
+        driver.quit()
 
     # === 1. Закрываем окно cookie по тексту кнопки ===
     if bank["cookie_text"]:
