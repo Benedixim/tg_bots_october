@@ -78,10 +78,10 @@ def fetch_categories_for_bank(
 
     driver = _driver()
     try:
-        try:
-            driver.maximize_window()
-        except Exception:
-            driver.set_window_size(1920, 1080)
+        # try:
+        #     driver.maximize_window()
+        # except Exception:
+        #     driver.set_window_size(1920, 1080)
 
         note_start = f"[bank {bank_id}] Открываем {url}"
         print(note_start)
@@ -405,7 +405,7 @@ def update_all_banks_categories(progress: ProgressFn = None) -> None:
     opts.add_argument("--window-size=1920,1080")
 
     driver = webdriver.Chrome(options=opts)
-    driver.get("https://kosmostechno.com/catalog?category=country_by_discount_promo_codes")
+    driver.get("https://plushki.by/partners")
     print(driver.title)
     driver.quit()
 
