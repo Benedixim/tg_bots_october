@@ -321,3 +321,133 @@ def backup_database(dest_dir: str = ".", filename: str | None = None) -> str:
         src.close()
 
     return out_path
+
+
+#------------Update-------------------
+def get_today_partner_changes() -> list[dict]:
+    """
+    Возвращает список словарей:
+    {
+        bank_name,
+        category_name,
+        partner_name,
+        partner_bonus,
+        change_type: "new" | "updated",
+        checked_at: "YYYY-MM-DD HH:MM:SS"
+    }
+    Только те партнёры, у кого последняя запись за сегодняшний день.
+    """
+    today = datetime.date.today()
+    since = datetime.datetime.combine(today, datetime.time(0, 0, 0))
+    since_str = since.strftime("%Y-%m-%d %H:%M:%S")
+
+    conn = _conn()
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            WITH latest AS (
+                SELECT
+                    p.bank_id,
+                    p.category_id,
+                    p.partner_name,
+                    p.partner_bonus,
+                    p.partner_link,
+                    p.checked_at,
+                    (
+                        SELECT COUNT(*)
+                        FROM partners p2
+                        WHERE p2.bank_id = p.bank_id
+                          AND p2.category_id = p.category_id
+                          AND p2.partner_name = p.partner_name
+                    ) AS hist_count
+                FROM partners p
+                WHERE p.checked_at = (
+                    SELECT MAX(p2.checked_at)
+                    FROM partners p2
+                    WHERE p2.bank_id = p.bank_id
+                      AND p2.category_id = p.category_id
+                      AND p2.partner_name = p.partner_name
+                )
+            )
+            SELECT
+                b.name as bank_name,
+                c.name as category_name,
+                l.partner_name,
+                l.partner_bonus,
+                l.checked_at,
+                l.hist_count
+            FROM latest l
+            JOIN banks b ON b.id = l.bank_id
+            JOIN categories c ON c.id = l.category_id
+            WHERE l.checked_at >= ?
+            ORDER BY b.name, c.name, l.partner_name;
+        """, (since_str,))
+        rows = cur.fetchall()
+    finally:
+        conn.close()
+
+    result = []
+    for bank_name, category_name, partner_name, partner_bonus, checked_at, hist_count in rows:
+        change_type = "new" if hist_count == 1 else "updated"
+        result.append({
+            "bank_name": bank_name,
+            "category_name": category_name,
+            "partner_name": partner_name,
+            "partner_bonus": partner_bonus,
+            "change_type": change_type,
+            "checked_at": checked_at,
+        })
+    return result
+
+# ---------- TELEGRAM USERS ----------
+
+def ensure_tg_users_table() -> None:
+    """
+    Гарантируем, что таблица tg_users существует.
+    Хранит chat_id всех, кому потом можно отправлять утренний дайджест.
+    """
+    conn = _conn()
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS tg_users (
+                chat_id INTEGER PRIMARY KEY,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            );
+        """)
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def remember_user(chat_id: int) -> None:
+    """
+    Сохраняем chat_id пользователя, если ещё не сохранён.
+    Вызываем, например, в /start и/или в других хендлерах бота.
+    """
+    ensure_tg_users_table()
+    conn = _conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT OR IGNORE INTO tg_users(chat_id) VALUES (?);",
+            (chat_id,)
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_all_chat_ids() -> List[int]:
+    """
+    Возвращает список chat_id всех пользователей,
+    которым можно отправлять утренний дайджест.
+    """
+    ensure_tg_users_table()
+    conn = _conn()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT chat_id FROM tg_users;")
+        return [row[0] for row in cur.fetchall()]
+    finally:
+        conn.close()

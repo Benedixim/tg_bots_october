@@ -22,7 +22,12 @@ from db_sql import (
     get_partner_counts_by_bank,
     get_bank_name,  
     backup_database,   # <— НОВОЕ
+    remember_user, 
+    get_all_chat_ids, 
+    get_today_partner_changes,
+    ensure_tg_users_table,
 )
+
 from updates import update_all_banks_categories
 
 
@@ -63,6 +68,7 @@ def plot_partners_by_bank(bank_id: int) -> str:
 # ---------- Bot Handlers ----------
 @bot.message_handler(commands=['start'])
 def start_message(message):
+    remember_user(message.chat.id) # запоминаем
     banks = get_banks()
     if not banks:
         bot.send_message(message.chat.id, "Банки не найдены.")
@@ -116,6 +122,7 @@ def callback_category(call):
 
 @bot.message_handler(commands=['graph'])
 def graph_start(message):
+    remember_user(message.chat.id) # запоминаем
     banks = get_banks()
     if not banks:
         bot.send_message(message.chat.id, "Банки не найдены.")
@@ -141,6 +148,7 @@ def callback_graphbank(call):
 
 @bot.message_handler(commands=['search'])
 def search_command(message):
+    remember_user(message.chat.id) # запоминаем
     msg = bot.send_message(message.chat.id, "Введите имя партнёра для поиска:")
     bot.register_next_step_handler(msg, perform_search)
 
@@ -302,6 +310,185 @@ def download_db_command(message):
     threading.Thread(target=_send_db_backup, args=(message.chat.id,), daemon=True).start()
 
 
+
+# ---------- Morning ---------------------
+from collections import defaultdict
+
+def format_changes_message(changes: list[dict]) -> str:
+    if not changes:
+        return ""  # пусть вызывающий сам решает, отправлять или нет
+
+    # Группируем: банк -> категория -> [партнёры]
+    grouped = defaultdict(lambda: defaultdict(list))
+    total_new = 0
+    total_updated = 0
+
+    for ch in changes:
+        bank = ch["bank_name"]
+        cat = ch["category_name"]
+        grouped[bank][cat].append(ch)
+        if ch["change_type"] == "new":
+            total_new += 1
+        else:
+            total_updated += 1
+
+    lines = []
+
+    # заголовок
+    total = total_new + total_updated
+    lines.append(f"к нашей программе лояльности присоединилось {total} новых/обновлённых партнёров.\n")
+
+    for bank, cats in grouped.items():
+        lines.append(f"🏦 {bank}")
+        for cat, partners in cats.items():
+            lines.append(f"\n{cat}")
+            for p in partners:
+                bonus = f" — {p['partner_bonus']}%" if p["partner_bonus"] else ""
+                if p["change_type"] == "new":
+                    prefix = "🆕 "
+                else:
+                    prefix = "🔁 "
+                lines.append(f"{prefix}{p['partner_name']}{bonus}")
+        lines.append("")  # пустая строка между банками
+
+    # тут можно потом добавить блоки "Уходят" и "Меняют процент", когда появится логика diff'а
+    return "\n".join(lines).strip()
+
+
+
+def _seconds_until_next_7am(now: dt.datetime | None = None) -> int:
+    now = now or dt.datetime.now()
+    target_date = now.date()
+    if now.hour >= 7:
+        target_date = target_date + dt.timedelta(days=1)
+    target_dt = dt.datetime.combine(target_date, dt.time(7, 0, 0))
+    return max(1, int((target_dt - now).total_seconds()))
+
+def morning_digest_loop():
+    from db_sql import get_today_partner_changes  # если в отдельном модуле
+    ensure_tg_users_table()  # на всякий случай
+
+    while True:
+        wait_s = _seconds_until_next_7am()
+        time.sleep(wait_s)
+
+        try:
+            now = dt.datetime.now()
+            print(f"[{now:%Y-%m-%d %H:%M:%S}] ▶️ Morning digest start")
+
+            changes = get_today_partner_changes()
+            if not changes:
+                print(f"[{now:%Y-%m-%d %H:%M:%S}] ℹ️ Morning digest: изменений нет")
+                continue
+
+            text = format_changes_message(changes)
+            if not text:
+                print(f"[{now:%Y-%m-%d %H:%M:%S}] ℹ️ Morning digest: нечего отправлять")
+                continue
+
+            chat_ids = get_all_chat_ids()
+            print(f"[{now:%Y-%m-%d %H:%M:%S}] ▶️ Отправляем дайджест {len(chat_ids)} пользователям")
+
+            for chat_id in chat_ids:
+                try:
+                    # на всякий случай режем по 4000 символов
+                    chunk = 3500
+                    for i in range(0, len(text), chunk):
+                        bot.send_message(chat_id, text[i:i+chunk])
+                except Exception as e:
+                    print(f"[{now:%Y-%m-%d %H:%M:%S}] ⚠️ Ошибка отправки дайджеста chat_id={chat_id}: {e}")
+
+            print(f"[{dt.datetime.now():%Y-%m-%d %H:%M:%S}] ✅ Morning digest done")
+        except Exception as e:
+            print(f"[{dt.datetime.now():%Y-%m-%d %H:%M:%S}] ❌ Morning digest error: {e}")
+
+# ----------------- ручной morning --------------------------- 
+
+# ---------- Ручной запуск утренней рассылки (/morning <secret>) ----------
+
+_morning_lock = threading.Lock()
+_morning_running = False
+
+
+def _run_manual_morning_digest(chat_id: int):
+    """
+    Однократная отправка утреннего дайджеста ТОЛЬКО пользователю,
+    который вызвал команду /morning <secret>.
+    """
+    global _morning_running
+    try:
+        msg = bot.send_message(chat_id, "📨 Формирую утренний дайджест…")
+
+        # 1. Берём изменения за сегодня
+        changes = get_today_partner_changes()
+        if not changes:
+            bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=msg.message_id,
+                text="ℹ️ За сегодня нет новых или изменённых партнёров. Дайджест не требуется."
+            )
+            return
+
+        # 2. Формируем текст
+        text = format_changes_message(changes)
+        if not text:
+            bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=msg.message_id,
+                text="ℹ️ Не удалось сформировать текст дайджеста."
+            )
+            return
+
+        bot.edit_message_text(
+            chat_id=chat_id,
+            message_id=msg.message_id,
+            text="📨 Отправляю дайджест…"
+        )
+
+        # 3. Отправляем ТОЛЬКО этому пользователю
+        chunk = 3500  # чтобы не упереться в лимит Telegram
+        for i in range(0, len(text), chunk):
+            bot.send_message(chat_id, text[i:i + chunk])
+
+        bot.send_message(chat_id, "✅ Утренний дайджест отправлен.")
+    except Exception as e:
+        bot.send_message(chat_id, f"❌ Ошибка при ручном запуске дайджеста: {e}")
+    finally:
+        _morning_running = False
+        try:
+            _morning_lock.release()
+        except RuntimeError:
+            pass
+
+@bot.message_handler(commands=['morning'])
+def morning_command(message):
+    """
+    Ручной запуск утренней рассылки только для отправителя.
+    Формат: /morning <secret> (секрет тот же, что и UPDATE_SECRET).
+    """
+    global _morning_running
+
+    parts = message.text.strip().split(maxsplit=1)
+    if len(parts) < 2 or parts[1].strip() != UPDATE_SECRET:
+        bot.send_message(message.chat.id, "⛔️ Неверный секрет. Формат: /morning <secret>")
+        return
+
+    if _morning_running:
+        bot.send_message(message.chat.id, "⏳ Утренняя рассылка уже выполняется. Дождитесь завершения.")
+        return
+
+    if not _morning_lock.acquire(blocking=False):
+        bot.send_message(message.chat.id, "⏳ Утренняя рассылка уже выполняется. Дождитесь завершения.")
+        return
+
+    _morning_running = True
+    threading.Thread(
+        target=_run_manual_morning_digest,
+        args=(message.chat.id,),
+        daemon=True
+    ).start()
+
+
 # ---------- KeepAlive + Flask ----------
 app = Flask(__name__)
 
@@ -341,5 +528,7 @@ if __name__ == "__main__":
     threading.Thread(target=start_keep_alive, daemon=True).start()
     # Nightly scraper
     threading.Thread(target=nightly_scrape_loop, daemon=True).start()
+    # Morning scraper
+    threading.Thread(target=morning_digest_loop, daemon=True).start()
     # Bot
     run_bot()
