@@ -26,6 +26,7 @@ from db_sql import (
     get_all_chat_ids, 
     get_today_partner_changes,
     ensure_tg_users_table,
+    fetch_partners_scrape_config
 )
 
 from updates import update_all_banks_categories
@@ -108,14 +109,31 @@ def callback_category(call):
         bot.send_message(call.message.chat.id, "Нет партнёров для этой категории.")
         return
 
+     # ← НОВОЕ: берём bonus_unit через db_sql, а не через sqlite напрямую
+    cfg = fetch_partners_scrape_config(bank_id)
+    bonus_unit = cfg.get("bonus_unit", "") or ""
+
     reply = "Партнёры данной категории:\n\n"
     for name, bonus, link in partners:
-        if link and not link.startswith("http"):
-            # если понадобится, можно хранить домен в banks и добавлять его тут
-            pass
-        bonus_display = bonus if bonus else "—"
-        shown_link = link if link else "#"
-        reply += f"- [{name}]({shown_link}) — бонус: {bonus_display}\n"
+        shown_link = link or "#"
+
+        # ✅ как ты хотел: выводим бонус только если он есть, в формате как в /search
+        bonus_display = f" — {bonus} {bonus_unit}".strip() if bonus else ""
+
+        reply += f"- [{name}]({shown_link}){bonus_display}\n"
+    # reply = "Партнёры данной категории:\n\n"
+    # for name, bonus, link in partners:
+    #     if link and not link.startswith("http"):
+    #         # если понадобится, можно хранить домен в banks и добавлять его тут
+    #         pass
+    #     bonus_display = bonus if bonus else "—"
+    #     shown_link = link if link else "#"
+    #     reply += f"- [{name}]({shown_link}) — бонус: {bonus_display}\n"
+
+
+        #не знает
+        #bonus_disp = f" — {bonus} {bonus_unit}".strip() if bonus else ""
+        #lines.append(f"- [{name}]({shown_link}){bonus_disp}")
 
     bot.send_message(call.message.chat.id, reply, parse_mode='Markdown', disable_web_page_preview=True)
 
@@ -181,7 +199,7 @@ def perform_search(message):
             lines.append(f"  → _{category}_")
             for p in partners:
                 bonus_disp = f" — {p['bonus']} {p['bonus_unit']}".strip() if p['bonus'] else ""
-                lines.append(f"    [{p['name']}]({p['link']}){bonus_disp}")
+                lines.append(f"    [{p['name']}]({p['link']}) {bonus_disp}")
 
     bot.send_message(message.chat.id, "\n".join(lines), parse_mode="Markdown", disable_web_page_preview=True)
 
@@ -315,10 +333,22 @@ def download_db_command(message):
 from collections import defaultdict
 
 def format_changes_message(changes: list[dict]) -> str:
+    """
+    Формирует красивый Markdown-вывод в стиле /search:
+    сгруппировано по банкам и категориям.
+    Ожидает элементы:
+    {
+        "bank_name": str,
+        "category_name": str,
+        "partner_name": str,
+        "partner_bonus": str | None,
+        "change_type": "new" | "updated",
+        "checked_at": "YYYY-MM-DD HH:MM:SS",
+    }
+    """
     if not changes:
-        return ""  # пусть вызывающий сам решает, отправлять или нет
+        return ""
 
-    # Группируем: банк -> категория -> [партнёры]
     grouped = defaultdict(lambda: defaultdict(list))
     total_new = 0
     total_updated = 0
@@ -332,26 +362,27 @@ def format_changes_message(changes: list[dict]) -> str:
         else:
             total_updated += 1
 
-    lines = []
-
-    # заголовок
     total = total_new + total_updated
-    lines.append(f"к нашей программе лояльности присоединилось {total} новых/обновлённых партнёров.\n")
 
+    lines: list[str] = []
+    # шапка
+    lines.append(
+        f"🔔 Обновления программы лояльности за сегодня:\n"
+        f"• всего: *{total}* партнёров "
+        f"(_{total_new} новых_, _{total_updated} обновлено_)\n"
+    )
+
+    # как в /search: банк → категория → партнёры
     for bank, cats in grouped.items():
-        lines.append(f"🏦 {bank}")
-        for cat, partners in cats.items():
-            lines.append(f"\n{cat}")
+        lines.append(f"\n🏦 *{bank}*")
+        for category, partners in cats.items():
+            lines.append(f"  → _{category}_")
             for p in partners:
-                bonus = f" — {p['partner_bonus']}%" if p["partner_bonus"] else ""
-                if p["change_type"] == "new":
-                    prefix = "🆕 "
-                else:
-                    prefix = "🔁 "
-                lines.append(f"{prefix}{p['partner_name']}{bonus}")
-        lines.append("")  # пустая строка между банками
+                bonus_disp = f" — {p['partner_bonus']}%" if p["partner_bonus"] else ""
+                emoji = "🆕" if p["change_type"] == "new" else "🔁"
+                # здесь ссылок нет, поэтому без [name](link)
+                lines.append(f"    {emoji} {p['partner_name']}{bonus_disp}")
 
-    # тут можно потом добавить блоки "Уходят" и "Меняют процент", когда появится логика diff'а
     return "\n".join(lines).strip()
 
 
