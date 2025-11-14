@@ -431,7 +431,7 @@ def update_all_banks_categories(progress: ProgressFn = None) -> None:
     #             progress(done, total, msg)
     try:
         print("🔍 Парсим категории с ")
-        categories = fetch_categories(bank_id=2)
+        categories = fetch_categories(bank_id=3)
         print(f"✅ Найдено {len(categories)} категорий")
 
         for c in categories:
