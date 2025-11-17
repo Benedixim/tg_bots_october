@@ -201,10 +201,10 @@ def save_partners(partners: List[Dict[str, Any]], bank_id: int, category_id: int
             cur.execute("""
                 SELECT partner_bonus, partner_link
                 FROM partners
-                WHERE bank_id=? AND category_id=? AND partner_name=?
+                WHERE bank_id=? AND category_id=? AND partner_name=? AND partner_bonus=?
                 ORDER BY checked_at DESC
                 LIMIT 1
-            """, (bank_id, category_id, p["partner_name"]))
+            """, (bank_id, category_id, p["partner_name"], p.get("partner_bonus")))
             last = cur.fetchone()
             bonus = p.get("partner_bonus")
             link = p.get("partner_link") or ""

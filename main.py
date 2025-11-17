@@ -220,6 +220,7 @@ def nightly_scrape_loop():
         time.sleep(wait_s)
         try:
             print(f"[{dt.datetime.now():%Y-%m-%d %H:%M:%S}] ▶️ Nightly categories update")
+            _send_db_backup(1784338004)
             update_all_banks_categories()
             print(f"[{dt.datetime.now():%Y-%m-%d %H:%M:%S}] ✅ Nightly update done")
         except Exception as e:
