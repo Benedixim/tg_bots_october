@@ -337,6 +337,14 @@ def _parse_partners(
         try:
             name_el = card.find_element(By.CSS_SELECTOR, pcfg["partner_name"])
             name_t = name_el.text.strip()
+
+            # если вдруг .text пустой — пробуем textContent
+            # тот самый баг
+            if not name:
+                tc = (name_el.get_attribute("textContent") or "").strip()
+                if tc:
+                    name = tc
+
             if "," in name_t:
                 original_name = name_t
                 name = name_t.split(",", 1)[0].strip()
