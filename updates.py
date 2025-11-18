@@ -340,10 +340,10 @@ def _parse_partners(
 
             # если вдруг .text пустой — пробуем textContent
             # тот самый баг
-            if not name:
+            if not name_t:
                 tc = (name_el.get_attribute("textContent") or "").strip()
                 if tc:
-                    name = tc
+                    name_t = tc
 
             if "," in name_t:
                 original_name = name_t
