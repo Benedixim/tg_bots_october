@@ -377,13 +377,13 @@ def format_changes_message(changes: list[dict]) -> str:
     for bank, cats in grouped.items():
         lines.append(f"\n🏦 *{bank}*")
         for category, partners in cats.items():
-            lines.append(f"→ _{category}_")
+            lines.append(f"  → _{category}_")
             for p in partners:
                 bonus_disp = f" — {p['partner_bonus']}%" if p["partner_bonus"] else ""
                 emoji = "🆕" if p["change_type"] == "new" else "🔁"
-                link = p.get("partner_link") or "#"   # 👈 на всякий случай заглушка
+                link = p['partner_link'] or "#"   # 👈 на всякий случай заглушка
                 lines.append(
-                    f"{emoji} [{p['partner_name']}]({link}){bonus_disp}"
+                    f"    {emoji} [{p['partner_name']}]({link}){bonus_disp}"
                 )  # 👈 имя как Markdown-ссылка
                 # здесь ссылок нет, поэтому без [name](link)
                 #lines.append(f"    {emoji} {p['partner_name']}{bonus_disp}")
@@ -399,6 +399,34 @@ def _seconds_until_next_7am(now: dt.datetime | None = None) -> int:
         target_date = target_date + dt.timedelta(days=1)
     target_dt = dt.datetime.combine(target_date, dt.time(7, 0, 0))
     return max(1, int((target_dt - now).total_seconds()))
+
+def send_markdown_long(chat_id: int, text: str, chunk_size: int = 3500):
+    """Отправка длинного Markdown-текста безопасными чанками по строкам."""
+    lines = text.split("\n")
+    buf = ""
+
+    for line in lines:
+        # +1 за перевод строки
+        if len(buf) + len(line) + 1 > chunk_size:
+            if buf:
+                bot.send_message(
+                    chat_id,
+                    buf,
+                    parse_mode="Markdown",
+                    disable_web_page_preview=True,
+                )
+            buf = line
+        else:
+            buf = f"{buf}\n{line}" if buf else line
+
+    if buf:
+        bot.send_message(
+            chat_id,
+            buf,
+            parse_mode="Markdown",
+            disable_web_page_preview=True,
+        )
+
 
 def morning_digest_loop():
     from db_sql import get_today_partner_changes  # если в отдельном модуле
@@ -427,10 +455,7 @@ def morning_digest_loop():
 
             for chat_id in chat_ids:
                 try:
-                    # на всякий случай режем по 4000 символов
-                    chunk = 3500
-                    for i in range(0, len(text), chunk):
-                        bot.send_message(chat_id, text[i:i+chunk])
+                    send_markdown_long(chat_id, text)
                 except Exception as e:
                     print(f"[{now:%Y-%m-%d %H:%M:%S}] ⚠️ Ошибка отправки дайджеста chat_id={chat_id}: {e}")
 
