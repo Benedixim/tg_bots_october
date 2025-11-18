@@ -404,6 +404,7 @@ def format_changes_message(changes: list[dict]) -> str:
                
     
                 lines.append(f"-   {emoji}[{p['partner_name']}]({link}){bonus_disp}")
+        bot.send_message("1784338004", "\n".join(lines), parse_mode="Markdown", disable_web_page_preview=True)
 
 
     return "\n".join(lines).strip()
