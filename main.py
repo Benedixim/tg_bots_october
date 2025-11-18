@@ -377,13 +377,13 @@ def format_changes_message(changes: list[dict]) -> str:
     for bank, cats in grouped.items():
         lines.append(f"\n🏦 *{bank}*")
         for category, partners in cats.items():
-            lines.append(f"  → _{category}_")
+            lines.append(f"→ _{category}_")
             for p in partners:
                 bonus_disp = f" — {p['partner_bonus']}%" if p["partner_bonus"] else ""
                 emoji = "🆕" if p["change_type"] == "new" else "🔁"
                 link = p.get("partner_link") or "#"   # 👈 на всякий случай заглушка
                 lines.append(
-                    f"    {emoji} [{p['partner_name']}]({link}){bonus_disp}"
+                    f"{emoji} [{p['partner_name']}]({link}){bonus_disp}"
                 )  # 👈 имя как Markdown-ссылка
                 # здесь ссылок нет, поэтому без [name](link)
                 #lines.append(f"    {emoji} {p['partner_name']}{bonus_disp}")
