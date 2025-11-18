@@ -401,7 +401,9 @@ def format_changes_message(changes: list[dict]) -> str:
                 link = p.get("partner_link") or "#"
                 # эмодзи по желанию, можно убрать emoji если не нужно
                 emoji = "🆕 " if p["change_type"] == "new" else "🔁 "
-                lines.append(f"    {emoji}[{p['partner_name']}]({link}){bonus_disp}")
+               
+    
+                lines.append(f"-   {emoji}[{p['partner_name']}]({link}){bonus_disp}")
 
 
     return "\n".join(lines).strip()
