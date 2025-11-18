@@ -373,20 +373,36 @@ def format_changes_message(changes: list[dict]) -> str:
         f"(_{total_new} новых_, _{total_updated} обновлено_)\n"
     )
 
-    # как в /search: банк → категория → партнёры
+    # # как в /search: банк → категория → партнёры
+    # for bank, cats in grouped.items():
+    #     lines.append(f"\n🏦 *{bank}*")
+    #     for category, partners in cats.items():
+    #         lines.append(f"  → _{category}_")
+    #         for p in partners:
+    #             bonus_disp = f" — {p['partner_bonus']}%" if p["partner_bonus"] else ""
+    #             emoji = "🆕" if p["change_type"] == "new" else "🔁"
+    #             link = p.get("partner_link") or "#"   # 👈 на всякий случай заглушка
+    #             lines.append(
+    #                 f"    {emoji} [{p['partner_name']}]({link}){bonus_disp}"
+    #             )  # 👈 имя как Markdown-ссылка
+    #             # здесь ссылок нет, поэтому без [name](link)
+    #             #lines.append(f"    {emoji} {p['partner_name']}{bonus_disp}")
+     # дальше — как в /search
     for bank, cats in grouped.items():
         lines.append(f"\n🏦 *{bank}*")
         for category, partners in cats.items():
             lines.append(f"  → _{category}_")
             for p in partners:
-                bonus_disp = f" — {p['partner_bonus']}%" if p["partner_bonus"] else ""
-                emoji = "🆕" if p["change_type"] == "new" else "🔁"
-                link = p.get("partner_link") or "#"   # 👈 на всякий случай заглушка
-                lines.append(
-                    f"    {emoji} [{p['partner_name']}]({link}){bonus_disp}"
-                )  # 👈 имя как Markdown-ссылка
-                # здесь ссылок нет, поэтому без [name](link)
-                #lines.append(f"    {emoji} {p['partner_name']}{bonus_disp}")
+                bonus_disp = (
+                    f" — {p['partner_bonus']}".strip()
+                    if p.get("partner_bonus")
+                    else ""
+                )
+                link = p.get("partner_link") or "#"
+                # эмодзи по желанию, можно убрать emoji если не нужно
+                emoji = "🆕 " if p["change_type"] == "new" else "🔁 "
+                lines.append(f"    {emoji}[{p['partner_name']}]({link}){bonus_disp}")
+
 
     return "\n".join(lines).strip()
 
