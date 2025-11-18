@@ -421,24 +421,50 @@ def _seconds_until_next_7am(now: dt.datetime | None = None) -> int:
     return max(1, int((target_dt - now).total_seconds()))
 
 def send_markdown_long(chat_id: int, text: str, chunk_size: int = 3500):
-    """Отправка длинного Markdown-текста безопасными чанками по строкам."""
+    """
+    Безопасное разбиение — никогда не ломает Markdown теги.
+    Режет только по логическим блокам:
+    блок начинается с строки '🏦 *Банк*'
+    """
     lines = text.split("\n")
-    buf = ""
+    
+    blocks = []
+    current_block = []
 
+    # 1) Разбираем на блоки вида:
+    #   🏦 *Банк*
+    #     → Категория
+    #       - партнёр...
     for line in lines:
-        # +1 за перевод строки
-        if len(buf) + len(line) + 1 > chunk_size:
-            if buf:
-                bot.send_message(
-                    chat_id,
-                    buf,
-                    parse_mode="Markdown",
-                    disable_web_page_preview=True,
-                )
-            buf = line
+        if line.startswith("🏦 "):  # начало нового банка
+            if current_block:
+                blocks.append("\n".join(current_block))
+            current_block = [line]
         else:
-            buf = f"{buf}\n{line}" if buf else line
+            current_block.append(line)
 
+    if current_block:
+        blocks.append("\n".join(current_block))
+
+    # 2) Склеиваем блоки в чанки не превышающие chunk_size
+    buf = ""
+    for block in blocks:
+        # +1 за перевод строки между блоками
+        add_len = len(block) + (1 if buf else 0)
+
+        if len(buf) + add_len > chunk_size:
+            # отправляем текущий буфер
+            bot.send_message(
+                chat_id,
+                buf,
+                parse_mode="Markdown",
+                disable_web_page_preview=True,
+            )
+            buf = block
+        else:
+            buf = block if not buf else f"{buf}\n{block}"
+
+    # 3) Отправляем гипотетично последний
     if buf:
         bot.send_message(
             chat_id,
@@ -446,72 +472,7 @@ def send_markdown_long(chat_id: int, text: str, chunk_size: int = 3500):
             parse_mode="Markdown",
             disable_web_page_preview=True,
         )
-import html
-def format_changes_message_html(changes: list[dict]) -> str:
-    """
-    Возвращает строку с HTML-разметкой (parse_mode="HTML").
-    Безопасно экранирует имена и бонусы.
-    """
-    if not changes:
-        return ""
 
-    grouped = defaultdict(lambda: defaultdict(list))
-    total_new = total_updated = 0
-
-    for ch in changes:
-        bank = ch["bank_name"]
-        cat = ch["category_name"]
-        grouped[bank][cat].append(ch)
-        if ch.get("change_type") == "new":
-            total_new += 1
-        else:
-            total_updated += 1
-
-    total = total_new + total_updated
-
-    parts: list[str] = []
-    parts.append(
-        "🔔 <b>Обновления программы лояльности за сегодня:</b>\n"
-        f"• всего: <b>{total}</b> партнёров "
-        f"(<i>{total_new} новых</i>, <i>{total_updated} обновлено</i>)\n"
-    )
-
-    for bank, cats in grouped.items():
-        parts.append(f"\n🏦 <b>{html.escape(bank)}</b>")
-        for category, partners in cats.items():
-            parts.append(f"  → <i>{html.escape(category)}</i>")
-            for p in partners:
-                bonus = p.get("partner_bonus")
-                bonus_disp = f" — {html.escape(str(bonus))}" if bonus else ""
-                name = html.escape(p.get("partner_name") or "—")
-                # безопасная ссылка: если есть — оборачиваем в <a>, иначе просто имя
-                link = p.get("partner_link")
-                if link:
-                    # складываем как тег <a>; html.escape для URL не обязателен здесь,
-                    # но можно дополнительно фильтровать/валидировать URL при необходимости.
-                    name_html = f'<a href="{html.escape(link)}">{name}</a>'
-                else:
-                    name_html = name
-
-                emoji = "🆕" if p.get("change_type") == "new" else "🔁"
-                parts.append(f"- {emoji} {name_html}{bonus_disp}")
-
-    return "\n".join(parts).strip()
-
-def send_html_long(chat_id: int, text: str, chunk_size: int = 3500):
-    lines = text.split("\n")
-    buf = ""
-
-    for line in lines:
-        if len(buf) + len(line) + 1 > chunk_size:
-            if buf:
-                bot.send_message(chat_id, buf, parse_mode="HTML", disable_web_page_preview=True)
-            buf = line
-        else:
-            buf = f"{buf}\n{line}" if buf else line
-
-    if buf:
-        bot.send_message(chat_id, buf, parse_mode="HTML", disable_web_page_preview=True)
 
 
 def morning_digest_loop():
@@ -531,7 +492,7 @@ def morning_digest_loop():
                 print(f"[{now:%Y-%m-%d %H:%M:%S}] ℹ️ Morning digest: изменений нет")
                 continue
 
-            text = format_changes_message_html(changes)
+            text = format_changes_message(changes)
             if not text:
                 print(f"[{now:%Y-%m-%d %H:%M:%S}] ℹ️ Morning digest: нечего отправлять")
                 continue
@@ -541,7 +502,7 @@ def morning_digest_loop():
 
             for chat_id in chat_ids:
                 try:
-                    send_html_long(chat_id, text)
+                    send_markdown_long(chat_id, text)
                 except Exception as e:
                     print(f"[{now:%Y-%m-%d %H:%M:%S}] ⚠️ Ошибка отправки дайджеста chat_id={chat_id}: {e}")
 
