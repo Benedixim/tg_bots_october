@@ -498,20 +498,68 @@ def format_changes_message_html(changes: list[dict]) -> str:
 
     return "\n".join(parts).strip()
 
-def send_html_long(chat_id: int, text: str, chunk_size: int = 3500):
-    lines = text.split("\n")
-    buf = ""
+def send_html_long(chat_id: int, text: str, chunk_size: int = 3500, bank_marker: str = "🏦"):
+    """
+    Безопасная отправка длинного HTML-текста, режем по банковским блокам.
+    - Ищем границы банков по маркеру bank_marker (по умолчанию '🏦').
+    - Шапка (до первого маркера) остаётся в начале первого блока.
+    - Собираем блоки в чанки, чтобы не дробить один банковский блок между сообщениями.
+    - Если один блок длиннее chunk_size, режем его по символам (фоллбек).
+    """
+    if not text:
+        return
 
-    for line in lines:
-        if len(buf) + len(line) + 1 > chunk_size:
-            if buf:
-                bot.send_message(chat_id, buf, parse_mode="HTML", disable_web_page_preview=True)
-            buf = line
-        else:
-            buf = f"{buf}\n{line}" if buf else line
+    # Нормализуем: убираем начальные/лишние переносы
+    text = text.strip()
 
-    if buf:
-        bot.send_message(chat_id, buf, parse_mode="HTML", disable_web_page_preview=True)
+    # Разделим текст на "блоки банков", сохраняем шапку в первом элементе
+    # Используем позитивный lookahead, чтобы разделить перед '\n🏦' (если есть)
+    pattern = rf'(?=\n{re.escape(bank_marker)})'
+    blocks = re.split(pattern, text)
+
+    # Если текст не содержит маркера, fallback: один блок — весь текст
+    if len(blocks) == 1:
+        blocks = [text]
+
+    # Собираем и шлём чанки, не превышая chunk_size
+    current = ""
+    for block in blocks:
+        block = block.lstrip("\n")  # убрать ведущие переносы, чтобы не накоплять их
+
+        # Если текущий буфер + этот блок умещаются — просто добавляем
+        if len(current) + len(block) + 1 <= chunk_size:
+            current = f"{current}\n{block}" if current else block
+            continue
+
+        # Иначе: сначала отправляем текущий (если есть)
+        if current:
+            bot.send_message(chat_id, current, parse_mode="HTML", disable_web_page_preview=True)
+            current = ""
+
+        # Если сам блок меньше лимита — отправляем его как отдельный чанк
+        if len(block) <= chunk_size:
+            bot.send_message(chat_id, block, parse_mode="HTML", disable_web_page_preview=True)
+            continue
+
+        # Фоллбек: блок слишком большой — режем его по символам аккуратно по ближайшему переводу строки
+        remaining = block
+        while remaining:
+            if len(remaining) <= chunk_size:
+                bot.send_message(chat_id, remaining, parse_mode="HTML", disable_web_page_preview=True)
+                break
+
+            # ищем ближайший '\n' назад от границы chunk_size
+            cut = remaining.rfind('\n', 0, chunk_size)
+            if cut == -1 or cut < 50:  # если нет подходящего перевода строки — режем по символам
+                cut = chunk_size
+
+            part = remaining[:cut]
+            bot.send_message(chat_id, part, parse_mode="HTML", disable_web_page_preview=True)
+            remaining = remaining[cut:].lstrip("\n")
+
+    # Отправить остаток
+    if current:
+        bot.send_message(chat_id, current, parse_mode="HTML", disable_web_page_preview=True)
 
 
 def morning_digest_loop():
