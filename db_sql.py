@@ -191,28 +191,71 @@ def get_latest_categories_by_bank(bank_id: int) -> List[Tuple[int, str, str]]:
 
 
 # ---------- PARTNERS ----------
+# def save_partners(partners: List[Dict[str, Any]], bank_id: int, category_id: int) -> None:
+#     conn = _conn()
+#     try:
+#         ensure_partners_table(conn)
+#         cur = conn.cursor()
+#         checked_at = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+#         for p in partners:
+#             cur.execute("""
+#                 SELECT partner_bonus, partner_link
+#                 FROM partners
+#                 WHERE bank_id=? AND category_id=? AND partner_name=? AND partner_bonus=?
+#                 ORDER BY checked_at DESC
+#                 LIMIT 1
+#             """, (bank_id, category_id, p["partner_name"], p.get("partner_bonus")))
+#             last = cur.fetchone()
+#             bonus = p.get("partner_bonus")
+#             link = p.get("partner_link") or ""
+#             if last is None or last[0] != bonus or last[1] != link:
+#                 cur.execute("""
+#                     INSERT INTO partners (bank_id, category_id, partner_name, partner_bonus, partner_link, checked_at)
+#                     VALUES (?, ?, ?, ?, ?, ?)
+#                 """, (bank_id, category_id, p["partner_name"], bonus, link, checked_at))
+#         conn.commit()
+#     finally:
+#         conn.close()
 def save_partners(partners: List[Dict[str, Any]], bank_id: int, category_id: int) -> None:
     conn = _conn()
     try:
         ensure_partners_table(conn)
         cur = conn.cursor()
         checked_at = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
         for p in partners:
+            bonus = p.get("partner_bonus")
+            link = p.get("partner_link")
+
+            # 🚫 Пропускаем, если бонус пустой
+            if not bonus or str(bonus).strip() == "":
+                continue
+
+            # 🚫 Пропускаем, если ссылки нет или она пустая
+            if not link or str(link).strip() == "":
+                continue
+
+            # link иногда = None → подстрахуемся
+            link = link.strip()
+
+            # Проверяем последнюю запись
             cur.execute("""
                 SELECT partner_bonus, partner_link
                 FROM partners
                 WHERE bank_id=? AND category_id=? AND partner_name=? AND partner_bonus=?
                 ORDER BY checked_at DESC
                 LIMIT 1
-            """, (bank_id, category_id, p["partner_name"], p.get("partner_bonus")))
+            """, (bank_id, category_id, p["partner_name"], bonus))
+
             last = cur.fetchone()
-            bonus = p.get("partner_bonus")
-            link = p.get("partner_link") or ""
+
+            # Изменилось? → сохраняем
             if last is None or last[0] != bonus or last[1] != link:
                 cur.execute("""
                     INSERT INTO partners (bank_id, category_id, partner_name, partner_bonus, partner_link, checked_at)
                     VALUES (?, ?, ?, ?, ?, ?)
                 """, (bank_id, category_id, p["partner_name"], bonus, link, checked_at))
+
         conn.commit()
     finally:
         conn.close()
