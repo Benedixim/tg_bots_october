@@ -30,8 +30,11 @@ ProgressFn = Optional[Callable[[int, int, str], None]]  # progress(done, total, 
 
 
 def _driver() -> webdriver.Chrome:
+    proxy = "http://jWYdGR:hxt7NC@91.195.125.187:8000"   # твой прокси
+
     opts = Options()
     # opts.page_load_strategy = 'none'  # можно включить, если нужно ускорение
+    opts.add_argument(f"--proxy-server={proxy}")
     opts.add_argument("--headless=new")
     opts.add_argument("--no-sandbox")
     opts.add_argument("--disable-dev-shm-usage")
