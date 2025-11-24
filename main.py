@@ -626,7 +626,13 @@ def run_flask():
 
 
 def run_bot():
-    bot.polling(none_stop=True)
+    #bot.polling(none_stop=True)
+    while True:
+        try:
+            bot.polling(none_stop=True, timeout=20, long_polling_timeout=20)
+        except Exception as e:
+            print("Ошибка polling:", e)
+            time.sleep(3)
 
 
 if __name__ == "__main__":
