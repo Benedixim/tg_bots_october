@@ -79,7 +79,7 @@ def start_message(message):
         markup.add(types.InlineKeyboardButton(name, callback_data=f"bank_{bank_id}"))
     bot.send_message(message.chat.id, "Выберите банк:", reply_markup=markup)
 
-#добавлено для кнопок
+#добавлено для кнопок 2
 @bot.message_handler(commands=['buttons'])
 def buttons_message(message):
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
