@@ -79,6 +79,14 @@ def start_message(message):
         markup.add(types.InlineKeyboardButton(name, callback_data=f"bank_{bank_id}"))
     bot.send_message(message.chat.id, "Выберите банк:", reply_markup=markup)
 
+@bot.message_handler(commands=['buttons'])
+def buttons_message(message):
+    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    btn1 = types.KeyboardButton("Поиск 🔍")
+    btn2 = types.KeyboardButton("Банки 🏦")
+    btn3 = types.KeyboardButton("График 📊")
+    markup.add(btn1, btn2)
+
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('bank_'))
 def callback_bank(call):
@@ -149,6 +157,20 @@ def graph_start(message):
     for bank_id, name, loyalty_url in banks:
         markup.add(types.InlineKeyboardButton(name, callback_data=f"graphbank_{bank_id}"))
     bot.send_message(message.chat.id, "Выберите банк для графика:", reply_markup=markup)
+
+
+@bot.message_handler(commands=content_types='text')
+def graph_start(message):
+    if message.text=="График 📊":
+        remember_user(message.chat.id) # запоминаем
+        banks = get_banks()
+        if not banks:
+            bot.send_message(message.chat.id, "Банки не найдены.")
+            return
+        markup = types.InlineKeyboardMarkup(row_width=1)
+        for bank_id, name, loyalty_url in banks:
+            markup.add(types.InlineKeyboardButton(name, callback_data=f"graphbank_{bank_id}"))
+        bot.send_message(message.chat.id, "Выберите банк для графика:", reply_markup=markup)
 
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('graphbank_'))
