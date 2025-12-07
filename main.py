@@ -67,7 +67,7 @@ def plot_partners_by_bank(bank_id: int) -> str:
 
 
 # ---------- Bot Handlers ----------
-@bot.message_handler(content_types='text')
+@bot.message_handler(func=lambda message: message.text == "🏦 Выбрать банк")
 def start_message(message):
     if message.text=="🏦 Выбрать банк":
         remember_user(message.chat.id) # запоминаем
@@ -80,29 +80,98 @@ def start_message(message):
             markup.add(types.InlineKeyboardButton(name, callback_data=f"bank_{bank_id}"))
         bot.send_message(message.chat.id, "Выберите банк:", reply_markup=markup)
 
-
-@bot.message_handler(commands=['buttons'])
-def send_buttons(message):
-    remember_user(message.chat.id) # запоминаем
-    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
+def send_main_menu(bot, chat_id):
+    """
+    Отправляет главное меню с кнопками
+    """
+    # Создаем объект клавиатуры
+    markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
+    
+    # Создаем кнопки
     btn1 = types.KeyboardButton("🏦 Выбрать банк")
     btn2 = types.KeyboardButton("🔍 Найти партнёра")
-    btn3 = types.KeyboardButton("📊Построить график")
+    btn3 = types.KeyboardButton("📊 Построить график")
+    
+    # Добавляем кнопки в клавиатуру
+    # Можно добавлять по одной или списком
     markup.add(btn1, btn2, btn3)
-    bot.send_message(message.chat.id,'Выберите что вам надо',reply_markup=markup)
+    # Или построчно:
+    # markup.row(btn1)
+    # markup.row(btn2, btn3)
+    
+    # Отправляем сообщение с клавиатурой
+    bot.send_message(
+        chat_id, 
+        "Выберите действие:", 
+        reply_markup=markup
+    )
 
 
 
+@bot.message_handler(commands=['addbuttons'])
+def add_buttons_to_all_users(message):
+    """
+    ОДНОРАЗОВАЯ команда для добавления кнопок всем пользователям
+    Формат: /addbuttons ваш_пароль
+    """
+    parts = message.text.strip().split()
+    if len(parts) < 2 or parts[1] != 'ваш_пароль':
+        return  
+    
 
-#добавлено для кнопок
-@bot.message_handler(commands=['start'])
-def buttons_message(message):
-    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    btn1 = types.KeyboardButton("🏦 Выбрать банк")
-    btn2 = types.KeyboardButton("🔍 Найти партнёра")
-    btn3 = types.KeyboardButton("📊Построить график")
-    markup.add(btn1, btn2, btn3)
-    bot.send_message(message.chat.id,'Выберите что вам надо',reply_markup=markup)
+    bot.send_message(message.chat.id, "Начинаю добавлять кнопки всем пользователям...")
+    
+
+    all_users = get_all_chat_ids()
+    
+    if not all_users:
+        bot.send_message(message.chat.id, "Нет пользователей в базе")
+        return
+    
+    bot.send_message(message.chat.id, f"Найдено {len(all_users)} пользователей")
+    
+    success = 0
+    failed = 0
+    
+    for user_id in all_users:
+        try:
+
+            markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
+            btn1 = types.KeyboardButton("🏦 Выбрать банк")
+            btn2 = types.KeyboardButton("🔍 Найти партнёра")
+            btn3 = types.KeyboardButton("📊 Построить график")
+            markup.add(btn1, btn2, btn3)
+            
+
+            bot.send_message(
+                user_id, 
+                "🎉 Бот обновлен! Доступны новые функции:", 
+                reply_markup=markup
+            )
+            success += 1
+            
+
+            time.sleep(0.1)
+            
+        except Exception as e:
+            failed += 1
+            print(f"Ошибка для пользователя {user_id}: {e}")
+    
+
+    report = f"""
+    Обновление завершено!
+
+    Успешно: {success}
+    Не удалось: {failed}
+    Всего: {len(all_users)}
+    """
+    bot.send_message(message.chat.id, report)
+    
+
+
+@bot.message_handler(commands=['start', 'menu'])
+def handle_start(message):
+    send_main_menu(bot, message.chat.id)
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('bank_'))
 def callback_bank(call):
