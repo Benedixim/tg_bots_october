@@ -32,7 +32,7 @@ from db_sql import (
 from updates import update_all_banks_categories
 
 
-# ---------- Telegram Bot ----------
+# ---------- Telegram Bot -----------
 TOKEN = os.getenv("TELEGRAM_TOKEN", "8176791165:AAFeivYr8ipnSI0m0yZ8IlLrkCuYHPMbZ0k")
 bot = telebot.TeleBot(TOKEN)
 
