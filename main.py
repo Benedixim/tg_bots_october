@@ -111,7 +111,7 @@ def send_main_menu(bot, chat_id):
 @bot.message_handler(commands=['addbuttons'])
 def add_buttons_to_all_users(message):
     parts = message.text.strip().split()
-    if len(parts) < 2 or parts[1] != 'ваш_пароль':
+    if len(parts) < 2 or parts[1] != 'qwerty11':
         return  
     
 
