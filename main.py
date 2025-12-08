@@ -267,12 +267,11 @@ def callback_graphbank(call):
         )
 
 
-@bot.message_handler(content_types='text')
+@bot.message_handler(func=lambda message: message.text == "🔍 Найти партнёра")
 def search_command(message):
-    if message.text=="🔍 Найти партнёра":
-        remember_user(message.chat.id) # запоминаем
-        msg = bot.send_message(message.chat.id, "Введите имя партнёра для поиска:")
-        bot.register_next_step_handler(msg, perform_search)
+    remember_user(message.chat.id) # запоминаем
+    msg = bot.send_message(message.chat.id, "Введите имя партнёра для поиска:")
+    bot.register_next_step_handler(msg, perform_search)
 
 
 def perform_search(message):
