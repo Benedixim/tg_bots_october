@@ -106,7 +106,7 @@ def send_main_menu(bot, chat_id):
         reply_markup=markup
     )
 
-
+# ---------- Add Buttons to All Users (/addbuttons <secret>) ----------
 
 @bot.message_handler(commands=['addbuttons'])
 def add_buttons_to_all_users(message):
