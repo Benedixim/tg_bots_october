@@ -33,7 +33,7 @@ from updates import update_all_banks_categories
 
 
 # ---------- Telegram Bot ----------
-TOKEN = os.getenv("TELEGRAM_TOKEN", "8176791165:AAFeivYr8ipnSI0m0yZ8IlLrkCuYHPMbZ0k")
+TOKEN = os.getenv("TELEGRAM_TOKEN", "7199243050:AAE0zxd3qWB222M820jcEp279Wj9zfrM4Hw")
 bot = telebot.TeleBot(TOKEN)
 
 
@@ -67,27 +67,107 @@ def plot_partners_by_bank(bank_id: int) -> str:
 
 
 # ---------- Bot Handlers ----------
-@bot.message_handler(commands=['start'])
+@bot.message_handler(func=lambda message: message.text == "🏦 Выбрать банк")
 def start_message(message):
-    remember_user(message.chat.id) # запоминаем
-    banks = get_banks()
-    if not banks:
-        bot.send_message(message.chat.id, "Банки не найдены.")
+    if message.text=="🏦 Выбрать банк":
+        remember_user(message.chat.id) # запоминаем
+        banks = get_banks()
+        if not banks:
+            bot.send_message(message.chat.id, "Банки не найдены.")
+            return
+        markup = types.InlineKeyboardMarkup(row_width=1)
+        for bank_id, name, loyalty_url in banks:
+            markup.add(types.InlineKeyboardButton(name, callback_data=f"bank_{bank_id}"))
+        bot.send_message(message.chat.id, "Выберите банк:", reply_markup=markup)
+
+def send_main_menu(bot, chat_id):
+    """
+    Отправляет главное меню с кнопками
+    """
+    # Создаем объект клавиатуры
+    markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
+    
+    # Создаем кнопки
+    btn1 = types.KeyboardButton("🏦 Выбрать банк")
+    btn2 = types.KeyboardButton("🔍 Найти партнёра")
+    btn3 = types.KeyboardButton("📊 Построить график")
+    
+    # Добавляем кнопки в клавиатуру
+    # Можно добавлять по одной или списком
+    markup.add(btn1, btn2, btn3)
+    # Или построчно:
+    # markup.row(btn1)
+    # markup.row(btn2, btn3)
+    
+    # Отправляем сообщение с клавиатурой
+    bot.send_message(
+        chat_id, 
+        "Выберите действие:", 
+        reply_markup=markup
+    )
+
+# Add Buttons to All Users (/addbuttons <secret>) 
+
+@bot.message_handler(commands=['addbuttons'])
+def add_buttons_to_all_users(message):
+    parts = message.text.strip().split()
+    if len(parts) < 2 or parts[1] != 'qwerty11':
+        return  
+    
+
+    bot.send_message(message.chat.id, "Начинаю добавлять кнопки всем пользователям...")
+    
+
+    all_users = get_all_chat_ids()
+    
+    if not all_users:
+        bot.send_message(message.chat.id, "Нет пользователей в базе")
         return
-    markup = types.InlineKeyboardMarkup(row_width=1)
-    for bank_id, name, loyalty_url in banks:
-        markup.add(types.InlineKeyboardButton(name, callback_data=f"bank_{bank_id}"))
-    bot.send_message(message.chat.id, "Выберите банк:", reply_markup=markup)
+    
+    bot.send_message(message.chat.id, f"Найдено {len(all_users)} пользователей")
+    
+    success = 0
+    failed = 0
+    
+    for user_id in all_users:
+        try:
 
-#добавлено для кнопок 2
-@bot.message_handler(commands=['buttons'])
-def buttons_message(message):
-    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    btn1 = types.KeyboardButton("Поиск 🔍")
-    btn2 = types.KeyboardButton("Банки 🏦")
-    btn3 = types.KeyboardButton("График 📊")
-    markup.add(btn1, btn2)
+            markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
+            btn1 = types.KeyboardButton("🏦 Выбрать банк")
+            btn2 = types.KeyboardButton("🔍 Найти партнёра")
+            btn3 = types.KeyboardButton("📊 Построить график")
+            markup.add(btn1, btn2, btn3)
+            
 
+            bot.send_message(
+                user_id, 
+                "🎉 Бот обновлен! Доступны новые функции:", 
+                reply_markup=markup
+            )
+            success += 1
+            
+
+            time.sleep(0.1)
+            
+        except Exception as e:
+            failed += 1
+            print(f"Ошибка для пользователя {user_id}: {e}")
+    
+
+    report = f"""
+    Обновление завершено!
+
+    Успешно: {success}
+    Не удалось: {failed}
+    Всего: {len(all_users)}
+    """
+    bot.send_message(message.chat.id, report)
+    
+
+
+@bot.message_handler(commands=['start', 'menu'])
+def handle_start(message):
+    send_main_menu(bot, message.chat.id)
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('bank_'))
 def callback_bank(call):
@@ -160,18 +240,18 @@ def graph_start(message):
     bot.send_message(message.chat.id, "Выберите банк для графика:", reply_markup=markup)
 
 
-@bot.message_handler(commands=content_types='text')
+@bot.message_handler(func=lambda message: message.text == "📊 Построить график")
 def graph_start(message):
-    if message.text=="График 📊":
-        remember_user(message.chat.id) # запоминаем
-        banks = get_banks()
-        if not banks:
-            bot.send_message(message.chat.id, "Банки не найдены.")
-            return
-        markup = types.InlineKeyboardMarkup(row_width=1)
-        for bank_id, name, loyalty_url in banks:
-            markup.add(types.InlineKeyboardButton(name, callback_data=f"graphbank_{bank_id}"))
-        bot.send_message(message.chat.id, "Выберите банк для графика:", reply_markup=markup)
+
+    remember_user(message.chat.id) # запоминаем
+    banks = get_banks()
+    if not banks:
+        bot.send_message(message.chat.id, "Банки не найдены.")
+        return
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    for bank_id, name, loyalty_url in banks:
+        markup.add(types.InlineKeyboardButton(name, callback_data=f"graphbank_{bank_id}"))
+    bot.send_message(message.chat.id, "Выберите банк для графика:", reply_markup=markup)
 
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('graphbank_'))
@@ -187,11 +267,12 @@ def callback_graphbank(call):
         )
 
 
-@bot.message_handler(commands=['search'])
+@bot.message_handler(content_types='text')
 def search_command(message):
-    remember_user(message.chat.id) # запоминаем
-    msg = bot.send_message(message.chat.id, "Введите имя партнёра для поиска:")
-    bot.register_next_step_handler(msg, perform_search)
+    if message.text=="🔍 Найти партнёра":
+        remember_user(message.chat.id) # запоминаем
+        msg = bot.send_message(message.chat.id, "Введите имя партнёра для поиска:")
+        bot.register_next_step_handler(msg, perform_search)
 
 
 def perform_search(message):
