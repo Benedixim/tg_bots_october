@@ -1,5 +1,6 @@
 # main.py
 import os
+from dotenv import load_dotenv
 import time
 import threading
 import datetime as dt
@@ -31,9 +32,12 @@ from db_sql import (
 
 from updates import update_all_banks_categories
 
+# ---------- Load .env ----------
+load_dotenv()
+
 
 # ---------- Telegram Bot -----------
-TOKEN = os.getenv("TELEGRAM_TOKEN", "8176791165:AAFeivYr8ipnSI0m0yZ8IlLrkCuYHPMbZ0k")
+TOKEN = os.getenv('BOT_TOKEN')
 bot = telebot.TeleBot(TOKEN)
 
 
