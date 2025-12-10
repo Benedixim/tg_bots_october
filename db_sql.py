@@ -242,7 +242,9 @@ def save_partners(partners: List[Dict[str, Any]], bank_id: int, category_id: int
             cur.execute("""
                 SELECT partner_bonus, partner_link
                 FROM partners
-                WHERE bank_id=? AND category_id=? AND partner_name=? AND COALESCE(partner_bonus, '')=? AND  COALESCE(partner_link, '')=?
+                WHERE bank_id=? AND category_id=? AND partner_name=? 
+                        AND COALESCE(NULLIF(TRIM(partner_bonus),''),'') = COALESCE(NULLIF(TRIM(?),''),'')
+                        AND COALESCE(NULLIF(TRIM(partner_link),''),'') = COALESCE(NULLIF(TRIM(?),''),'')
                 ORDER BY checked_at DESC
                 LIMIT 1
             """, (bank_id, category_id, p["partner_name"], bonus, link))
