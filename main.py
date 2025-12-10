@@ -27,7 +27,9 @@ from db_sql import (
     get_all_chat_ids, 
     get_today_partner_changes,
     ensure_tg_users_table,
-    fetch_partners_scrape_config
+    fetch_partners_scrape_config,
+    get_categories,
+    get_banks_name
 )
 
 from updates import update_all_banks_categories
@@ -73,16 +75,17 @@ def plot_partners_by_bank(bank_id: int) -> str:
 # ---------- Bot Handlers ----------
 @bot.message_handler(func=lambda message: message.text == "🏦 Выбрать банк")
 def start_message(message):
-    if message.text=="🏦 Выбрать банк":
-        remember_user(message.chat.id) # запоминаем
-        banks = get_banks()
-        if not banks:
-            bot.send_message(message.chat.id, "Банки не найдены.")
-            return
-        markup = types.InlineKeyboardMarkup(row_width=1)
-        for bank_id, name, loyalty_url in banks:
-            markup.add(types.InlineKeyboardButton(name, callback_data=f"bank_{bank_id}"))
-        bot.send_message(message.chat.id, "Выберите банк:", reply_markup=markup)
+    remember_user(message.chat.id) # запоминаем
+    banks = get_banks()
+    if not banks:
+        bot.send_message(message.chat.id, "Банки не найдены.")
+        return
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    for bank_id, name, loyalty_url in banks:
+        if bank_id != 13 and bank_id != 6:
+            name += " - С" 
+        markup.add(types.InlineKeyboardButton(name, callback_data=f"bank_{bank_id}"))
+    bot.send_message(message.chat.id, "Выберите банк:", reply_markup=markup)
 
 def send_main_menu(bot, chat_id):
     """
@@ -206,7 +209,10 @@ def callback_category(call):
     cfg = fetch_partners_scrape_config(bank_id)
     bonus_unit = cfg.get("bonus_unit", "") or ""
 
-    reply = "Партнёры данной категории:\n\n"
+    partner_name, cat_link = get_categories(cat_id)
+    bank_name = get_banks_name(bank_id)
+
+    reply = f'Партнёры категории [{partner_name}]({cat_link}), {bank_name}\n\n'
     for name, bonus, link in partners:
         shown_link = link or "#"
 
@@ -254,6 +260,8 @@ def graph_start(message):
         return
     markup = types.InlineKeyboardMarkup(row_width=1)
     for bank_id, name, loyalty_url in banks:
+        if bank_id != 13 and bank_id != 6:
+            name += " - С"         
         markup.add(types.InlineKeyboardButton(name, callback_data=f"graphbank_{bank_id}"))
     bot.send_message(message.chat.id, "Выберите банк для графика:", reply_markup=markup)
 

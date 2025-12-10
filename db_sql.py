@@ -23,6 +23,34 @@ def get_banks() -> List[Tuple[int, str, str]]:
         return cur.fetchall()
     finally:
         conn.close()
+    print(cur.fetchall())
+
+def get_banks_name(bank_id: int) -> str:
+    conn = _conn()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT name FROM banks WHERE id=?;", (bank_id,))
+        result = cur.fetchone() 
+        
+        if result:
+            return result[0] 
+        return None
+    finally:
+        conn.close()
+
+def get_categories(category_id: int) -> Tuple[str, str]:
+    """Возвращает (название, ссылку) категории"""
+    conn = _conn()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT name, url FROM categories WHERE id=?;", (category_id,))
+        result = cur.fetchone()
+        if result:
+            name, url = result  # распаковываем кортеж
+            return name, url
+        return None, None
+    finally:
+        conn.close()
 
 
 def get_all_bank_ids() -> List[int]:
@@ -33,6 +61,7 @@ def get_all_bank_ids() -> List[int]:
         return [r[0] for r in cur.fetchall()]
     finally:
         conn.close()
+    conn.close()
 
 
 # ---------- SCRAPER CONFIG ----------
@@ -226,7 +255,6 @@ def save_partners(partners: List[Dict[str, Any]], bank_id: int, category_id: int
         for p in partners:
             bonus = p.get("partner_bonus")
             link = p.get("partner_link")
-
             # 🚫 Пропускаем, если бонус пустой
             #if not bonus or str(bonus).strip() == "":
             #    continue
