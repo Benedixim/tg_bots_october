@@ -108,6 +108,84 @@ def fetch_partners_scrape_config(bank_id: int) -> Dict[str, Any]:
         conn.close()
 
 
+def get_today_partner_changes() -> list[dict]:
+    """
+    Возвращает список словарей:
+    {
+        bank_name,
+        category_name,
+        partner_name,
+        partner_bonus,
+        bonus_unit,  # <- ДОБАВИЛИ ЭТО
+        change_type: "new" | "updated",
+        checked_at: "YYYY-MM-DD HH:MM:SS"
+    }
+    Только те партнёры, у кого последняя запись за сегодняшний день.
+    """
+    today = datetime.date.today()
+    since = datetime.datetime.combine(today, datetime.time(0, 0, 0))
+    since_str = since.strftime("%Y-%m-%d %H:%M:%S")
+
+    conn = _conn()
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            WITH latest AS (
+                SELECT
+                    p.bank_id,
+                    p.category_id,
+                    p.partner_name,
+                    p.partner_bonus,
+                    p.partner_link,
+                    p.checked_at,
+                    (
+                        SELECT COUNT(*)
+                        FROM partners p2
+                        WHERE p2.bank_id = p.bank_id
+                          AND p2.category_id = p.category_id
+                          AND p2.partner_name = p.partner_name
+                    ) AS hist_count
+                FROM partners p
+                WHERE p.checked_at = (
+                    SELECT MAX(p2.checked_at)
+                    FROM partners p2
+                    WHERE p2.bank_id = p.bank_id
+                      AND p2.category_id = p.category_id
+                      AND p2.partner_name = p.partner_name
+                )
+            )
+            SELECT
+                b.name as bank_name,
+                c.name as category_name,
+                l.partner_name,
+                l.partner_bonus,
+                l.checked_at,
+                l.hist_count,
+                b.bonus_unit  -- ДОБАВИЛИ ЭТО
+            FROM latest l
+            JOIN banks b ON b.id = l.bank_id
+            JOIN categories c ON c.id = l.category_id
+            WHERE l.checked_at >= ?
+            ORDER BY b.name, c.name, l.partner_name;
+        """, (since_str,))
+        rows = cur.fetchall()
+    finally:
+        conn.close()
+
+    result = []
+    for bank_name, category_name, partner_name, partner_bonus, checked_at, hist_count, bonus_unit in rows:
+        change_type = "new" if hist_count == 1 else "updated"
+        result.append({
+            "bank_name": bank_name,
+            "category_name": category_name,
+            "partner_name": partner_name,
+            "partner_bonus": partner_bonus,
+            "change_type": change_type,
+            "checked_at": checked_at,
+            "bonus_unit": bonus_unit or "",  # ДОБАВИЛИ
+        })
+    return result
+
 # ---------- TABLE ENSURE ----------
 def ensure_categories_table(conn: Optional[sqlite3.Connection] = None) -> None:
     close = False
@@ -368,6 +446,26 @@ def get_bank_name(bank_id: int) -> str:
     finally:
         conn.close()
 
+
+def get_partner_counts()-> List[Tuple[str, int]]:
+    """
+    [(bank_name, partners_count), ...] — подсчёт партнёров по банкам для графика (DESC).
+    """
+    conn = _conn()
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT b.name, COUNT(p.partner_name) AS partner_cnt
+            FROM banks b
+            LEFT JOIN partners p ON b.id = p.bank_id
+            GROUP BY b.name
+            ORDER BY partner_cnt DESC, b.name ASC;
+        """)
+        return cur.fetchall()
+    finally:
+        conn.close()
+
+
 def backup_database(dest_dir: str = ".", filename: str | None = None) -> str:
     """
     Делает безопасную копию banks.db и возвращает путь к файлу.
@@ -471,6 +569,54 @@ def get_today_partner_changes() -> list[dict]:
             "checked_at": checked_at,
         })
     return result
+
+
+
+def get_test_digest_data():
+    """Возвращает тестовые данные для статичного дайджеста"""
+    conn = _conn()
+    try:
+        cur = conn.cursor()
+        
+        # Берем последние 50 партнеров из БД как статичные данные
+        cur.execute("""
+            SELECT 
+                b.name as bank_name,
+                c.name as category_name,
+                p.partner_name,
+                p.partner_bonus,
+                b.bonus_unit,
+                p.partner_link,
+                p.checked_at
+            FROM partners p
+            JOIN banks b ON p.bank_id = b.id
+            JOIN categories c ON p.category_id = c.id
+            WHERE p.partner_bonus IS NOT NULL 
+            AND p.partner_bonus != ''
+            ORDER BY p.checked_at DESC
+            LIMIT 30
+        """)
+        
+        rows = cur.fetchall()
+        
+        # Конвертируем в нужный формат
+        changes = []
+        for row in rows:
+            changes.append({
+                "bank_name": row[0],
+                "category_name": row[1],
+                "partner_name": row[2],
+                "partner_bonus": row[3],
+                "bonus_unit": row[4] or "",
+                "partner_link": row[5] or "#",
+                "checked_at": row[6],
+                "change_type": "updated"
+            })
+        
+        return changes
+        
+    finally:
+        conn.close()
 
 # ---------- TELEGRAM USERS ----------
 

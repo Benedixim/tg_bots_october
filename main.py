@@ -29,7 +29,8 @@ from db_sql import (
     ensure_tg_users_table,
     fetch_partners_scrape_config,
     get_categories,
-    get_banks_name
+    get_banks_name,
+    get_test_digest_data
 )
 
 from updates import update_all_banks_categories
@@ -148,7 +149,7 @@ def add_buttons_to_all_users(message):
 
             bot.send_message(
                 user_id, 
-                "🎉 Бот обновлен! Доступны новые функции:", 
+                "🎉 Бот обновлен! Доступны новые функции.", 
                 reply_markup=markup
             )
             success += 1
@@ -508,17 +509,24 @@ def format_changes_message(changes: list[dict]) -> str:
         for category, partners in cats.items():
             lines.append(f"  → _{category}_")
             for p in partners:
-                bonus_disp = (
-                    f" — {p['partner_bonus']}".strip()
-                    if p.get("partner_bonus")
-                    else ""
-                )
+                if bank != "Паритетбанк":
+                    bonus_disp = (
+                        f" — {p['partner_bonus']} {p['bonus_unit']}".strip()
+                        if p.get("partner_bonus")
+                        else ""
+                    )
+                else:
+                    bonus_disp = (
+                        f"".strip()
+                        if p.get("partner_bonus")
+                        else ""
+                    )
                 link = p.get("partner_link") or "#"
                 # эмодзи по желанию, можно убрать emoji если не нужно
                 emoji = "🆕 " if p["change_type"] == "new" else "🔁 "
                
     
-                lines.append(f"-   {emoji}[{p['partner_name']}]({link}){bonus_disp}")
+                lines.append(f"-   {emoji}[{p['partner_name']}]({link}) {bonus_disp}")
             #bot.send_message("1784338004", "\n".join(lines), parse_mode="Markdown", disable_web_page_preview=True)
         
 
@@ -526,6 +534,37 @@ def format_changes_message(changes: list[dict]) -> str:
     return "\n".join(lines).strip()
 
 
+@bot.message_handler(commands=['db_digest'])
+def db_digest_command(message):
+    """
+    Статичный дайджест из реальных данных БД
+    """
+    try:
+        from db_sql import get_test_digest_data
+        changes = get_test_digest_data()
+        
+        if not changes:
+            bot.send_message(message.chat.id, "ℹ️ В базе нет данных для дайджеста.")
+            return
+        
+        text = format_changes_message(changes)
+        
+        bot.send_message(
+            message.chat.id,
+            "🗄️ СТАТИЧНЫЙ ДАЙДЖЕСТ ИЗ БД:\n"
+            f"• Записей: {len(changes)}\n"
+            f"• Данные взяты из базы\n"
+            f"• Будет показывать одни и те же данные\n"
+        )
+        
+        # Сохраняем текст при первом вызове
+        if not hasattr(db_digest_command, 'cached_text'):
+            db_digest_command.cached_text = text
+        
+        send_markdown_long(message.chat.id, db_digest_command.cached_text)
+        
+    except Exception as e:
+        bot.send_message(message.chat.id, f"❌ Ошибка: {str(e)}")
 
 def _seconds_until_next_7am(now: dt.datetime | None = None) -> int:
     now = now or dt.datetime.now()
@@ -682,6 +721,10 @@ def _run_manual_morning_digest(chat_id: int):
             _morning_lock.release()
         except RuntimeError:
             pass
+
+
+
+
 
 @bot.message_handler(commands=['morning'])
 def morning_command(message):
