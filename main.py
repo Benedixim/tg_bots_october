@@ -14,7 +14,6 @@ from aiohttp import ClientSession
 
 import telebot
 from telebot import types
-
 from db_sql import (
     get_banks,
     get_latest_categories_by_bank,
@@ -30,7 +29,13 @@ from db_sql import (
     fetch_partners_scrape_config,
     get_categories,
     get_banks_name,
-    get_test_digest_data
+    get_test_digest_data,
+    ensure_status_columns,
+    prepare_statuses_for_update,
+    finalize_statuses_after_update,
+    get_status_report,
+    get_today_changes_with_status,
+    DB_PATH
 )
 
 from updates import update_all_banks_categories
@@ -236,6 +241,170 @@ def callback_category(call):
         #lines.append(f"- [{name}]({shown_link}){bonus_disp}")
 
     bot.send_message(call.message.chat.id, reply, parse_mode='Markdown', disable_web_page_preview=True)
+
+
+
+async def update_all_banks_with_status(progress_callback=None):
+    """
+    Обёртка над существующим update_all_banks_categories с системой статусов
+    """
+    try:
+        ensure_status_columns()
+        
+        # ШАГ 1: Подготовка статусов перед обновлением
+        prepared = prepare_statuses_for_update()
+        print(f"✓ Подготовлено статусов: {prepared}")
+        
+        if progress_callback:
+            progress_callback(0, 100, "Подготовка статусов...")
+
+        
+        original_save_partners = db_sql.save_partners
+        
+
+        db_sql.save_partners = db_sql.save_partners_with_status_logic
+        
+        try:
+            print("Запускаем существующий update_all_banks_categories...")
+            await update_all_banks_categories(progress_callback)
+            
+
+            finalized = finalize_statuses_after_update()
+            print(f"✓ Финализировано статусов: {finalized}")
+            
+            
+            report = get_status_report()
+            
+            print(f"\n✅ Обновление с системой статусов завершено!")
+            print(f"Статистика: {report['stats']}")
+            
+            return report
+            
+        finally:
+            db_sql.save_partners = original_save_partners
+            
+    except Exception as e:
+        print(f"❌ Ошибка в обновлении со статусами: {e}")
+        raise
+
+def run_update_with_status_wrapper(progress_callback=None):
+    return asyncio.run(update_all_banks_with_status(progress_callback))
+
+
+@bot.message_handler(commands=['digest_with_status'])
+def digest_with_status_command(message):
+    """
+    Дайджест с текущими статусами партнёров из БД
+    """
+    try:
+        from db_sql import get_today_changes_with_status
+        changes = get_today_changes_with_status()
+        
+        if not changes:
+            bot.send_message(message.chat.id, "ℹ️ Сегодняшних изменений нет")
+            return
+        
+        # Проверяем, есть ли статусы в данных
+        has_status = any('status' in change for change in changes)
+        
+        if not has_status:
+            bot.send_message(
+                message.chat.id,
+                "⚠️ Колонка 'status' не найдена в базе данных.\n"
+                "Для работы системы статусов выполните:\n"
+                "`/init_status qwerty11`\n\n"
+                "Показываю обычный дайджест без статусов..."
+            )
+        
+        # Формируем дайджест
+        text = format_changes_message(changes)
+        
+        # Показываем
+        header = "📋 ДАЙДЖЕСТ СО СТАТУСАМИ (сегодня):\n" if has_status else "📋 ОБЫЧНЫЙ ДАЙДЖЕСТ (сегодня):\n"
+        header += f"• Партнёров: {len(changes)}\n"
+        
+        if not has_status:
+            header += "• ⚠️ Статусы недоступны (требуется инициализация)\n"
+        
+        bot.send_message(message.chat.id, header)
+        
+        send_markdown_long(message.chat.id, text)
+        
+    except Exception as e:
+        bot.send_message(message.chat.id, f"❌ Ошибка: {str(e)}")
+
+@bot.message_handler(commands=['check_db'])
+def check_db_command(message):
+    """Проверяет структуру базы данных"""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cur = conn.cursor()
+        
+        # Проверяем таблицу partners
+        cur.execute("PRAGMA table_info(partners);")
+        partners_cols = cur.fetchall()
+        
+        # Проверяем таблицу status_log
+        cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='status_log';")
+        has_status_log = cur.fetchone() is not None
+        
+        response = "🔍 ПРОВЕРКА СТРУКТУРЫ БАЗЫ:\n\n"
+        response += "📋 Таблица partners:\n"
+        for col in partners_cols:
+            col_id, name, type_, notnull, default, pk = col
+            response += f"• {name} ({type_})"
+            if default:
+                response += f" DEFAULT={default}"
+            response += "\n"
+        
+        response += f"\n📋 Таблица status_log: {'✅ есть' if has_status_log else '❌ отсутствует'}\n"
+        
+        # Проверяем, есть ли данные со статусами
+        if 'status' in [col[1] for col in partners_cols]:
+            cur.execute("SELECT COUNT(*) FROM partners WHERE status IS NOT NULL AND status != ''")
+            count_with_status = cur.fetchone()[0]
+            cur.execute("SELECT COUNT(*) FROM partners")
+            total = cur.fetchone()[0]
+            response += f"\n📊 Данные со статусами: {count_with_status}/{total} записей\n"
+        
+        conn.close()
+        
+        bot.send_message(message.chat.id, response)
+        
+    except Exception as e:
+        bot.send_message(message.chat.id, f"❌ Ошибка: {str(e)}")
+
+@bot.message_handler(commands=['init_status'])
+def init_status_command(message):
+    """Инициализирует систему статусов"""
+    try:
+        parts = message.text.strip().split()
+        if len(parts) < 2 or parts[1] != 'qwerty11':
+            bot.send_message(message.chat.id, "⛔️ Неверный секрет")
+            return
+        
+        bot.send_message(message.chat.id, "🔧 Инициализация системы статусов...")
+        
+        # Проверяем и создаем колонку
+        from db_sql import ensure_status_columns
+        ensure_status_columns()
+        
+        # Проверяем структуру
+        conn = sqlite3.connect(DB_PATH)
+        cur = conn.cursor()
+        cur.execute("PRAGMA table_info(partners);")
+        columns = [col[1] for col in cur.fetchall()]
+        conn.close()
+        
+        response = "✅ Система статусов инициализирована\n\n"
+        response += "Структура таблицы partners:\n"
+        for col in columns:
+            response += f"• {col}\n"
+        
+        bot.send_message(message.chat.id, response)
+        
+    except Exception as e:
+        bot.send_message(message.chat.id, f"❌ Ошибка: {str(e)}")
 
 
 @bot.message_handler(commands=['graph'])
@@ -469,15 +638,23 @@ def format_changes_message(changes: list[dict]) -> str:
     grouped = defaultdict(lambda: defaultdict(list))
     total_new = 0
     total_updated = 0
+    total_deleted = 0
 
     for ch in changes:
         bank = ch["bank_name"]
         cat = ch["category_name"]
         grouped[bank][cat].append(ch)
-        if ch["change_type"] == "new":
+
+        status = ch.get("status", "")
+        if status == "new":
             total_new += 1
+            ch["change_type"] = "new"
+        elif status == "new_delete":
+            total_deleted += 1
+            ch["change_type"] = "deleted"
         else:
             total_updated += 1
+            ch["change_type"] = "updated"
 
     total = total_new + total_updated
 
@@ -486,7 +663,7 @@ def format_changes_message(changes: list[dict]) -> str:
     lines.append(
         f"🔔 Обновления программы лояльности за сегодня:\n"
         f"• всего: *{total}* партнёров "
-        f"(_{total_new} новых_, _{total_updated} обновлено_)\n"
+        f"(_{total_new} новых_, _{total_updated} обновлено_, _{total_deleted} удалено_)\n"
     )
 
     # # как в /search: банк → категория → партнёры
@@ -506,12 +683,15 @@ def format_changes_message(changes: list[dict]) -> str:
      # дальше — как в /search
     for bank, cats in grouped.items():
         lines.append(f"\n🏦 *{bank}*")
+
         for category, partners in cats.items():
             lines.append(f"  → _{category}_")
+
             for p in partners:
                 if bank != "Паритетбанк":
+                    status = p.get("status", "")
                     bonus_disp = (
-                        f" — {p['partner_bonus']} {p['bonus_unit']}".strip()
+                        f" — {p['partner_bonus']}{p.get('bonus_unit', '')}".strip()
                         if p.get("partner_bonus")
                         else ""
                     )
@@ -521,9 +701,18 @@ def format_changes_message(changes: list[dict]) -> str:
                         if p.get("partner_bonus")
                         else ""
                     )
+                    
                 link = p.get("partner_link") or "#"
                 # эмодзи по желанию, можно убрать emoji если не нужно
-                emoji = "🆕 " if p["change_type"] == "new" else "🔁 "
+                if status == "new":
+                    emoji = "🆕 "
+                elif status == "new_delete":
+                    emoji = "🗑️ "  # Значок удаления
+                    # Для удаленных партнёров можно убрать ссылку
+                    link = "#"
+                    bonus_disp = ""  # У удаленных обычно нет бонусов
+                else:
+                    emoji = "🔁 "
                
     
                 lines.append(f"-   {emoji}[{p['partner_name']}]({link}) {bonus_disp}")
