@@ -656,7 +656,7 @@ def format_changes_message(changes: list[dict]) -> str:
             total_updated += 1
             ch["change_type"] = "updated"
 
-    total = total_new + total_updated
+    total = total_new + total_updated + total_deleted
 
     lines: list[str] = []
     # шапка
@@ -688,34 +688,33 @@ def format_changes_message(changes: list[dict]) -> str:
             lines.append(f"  → _{category}_")
 
             for p in partners:
-                if bank != "Паритетбанк":
-                    status = p.get("status", "")
-                    bonus_disp = (
-                        f" — {p['partner_bonus']}{p.get('bonus_unit', '')}".strip()
-                        if p.get("partner_bonus")
-                        else ""
-                    )
+                # Определяем эмодзи по типу изменения
+                change_type = p.get("change_type", "updated")
+                if change_type == "new":
+                    emoji = "🆕"
+                elif change_type == "deleted":
+                    emoji = "🗑️"
                 else:
-                    bonus_disp = (
-                        f"".strip()
-                        if p.get("partner_bonus")
-                        else ""
-                    )
-                    
-                link = p.get("partner_link") or "#"
-                # эмодзи по желанию, можно убрать emoji если не нужно
-                if status == "new":
-                    emoji = "🆕 "
-                elif status == "new_delete":
-                    emoji = "🗑️ "  # Значок удаления
-                    # Для удаленных партнёров можно убрать ссылку
-                    link = "#"
-                    bonus_disp = ""  # У удаленных обычно нет бонусов
-                else:
-                    emoji = "🔁 "
+                    emoji = "🔁"
                
-    
-                lines.append(f"-   {emoji}[{p['partner_name']}]({link}) {bonus_disp}")
+                bonus = p.get("partner_bonus", "")
+                bonus_unit = p.get("bonus_unit", "")
+                
+                if bonus and bonus.strip():
+                    if bank == "Паритетбанк":
+                        bonus_disp = ""
+                    else:
+                        bonus_disp = f" — {bonus}{bonus_unit}".strip()
+                else:
+                    bonus_disp = ""
+                
+                link = p.get("partner_link", "#")
+                if change_type == "deleted":
+                    link = "#"
+                    bonus_disp = ""
+
+
+                lines.append(f"-   {emoji} [{p['partner_name']}]({link}) {bonus_disp}")
             #bot.send_message("1784338004", "\n".join(lines), parse_mode="Markdown", disable_web_page_preview=True)
         
 
@@ -731,6 +730,7 @@ def db_digest_command(message):
     try:
         from db_sql import get_test_digest_data
         changes = get_test_digest_data()
+        #changes = get_today_partner_changes()
         
         if not changes:
             bot.send_message(message.chat.id, "ℹ️ В базе нет данных для дайджеста.")
@@ -871,7 +871,61 @@ def _run_manual_morning_digest(chat_id: int):
         msg = bot.send_message(chat_id, "📨 Формирую утренний дайджест…")
 
         # 1. Берём изменения за сегодня
-        changes = get_today_partner_changes()
+        # changes = get_today_partner_changes()
+        changes = get_test_digest_data()
+        if not changes:
+            bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=msg.message_id,
+                text="ℹ️ За сегодня нет новых или изменённых партнёров. Дайджест не требуется."
+            )
+            return
+
+        # 2. Формируем текст
+        text = format_changes_message(changes)
+        if not text:
+            bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=msg.message_id,
+                text="ℹ️ Не удалось сформировать текст дайджеста."
+            )
+            return
+
+        bot.edit_message_text(
+            chat_id=chat_id,
+            message_id=msg.message_id,
+            text="📨 Отправляю дайджест…"
+        )
+
+        # # 3. Отправляем ТОЛЬКО этому пользователю
+        # chunk = 3500  # чтобы не упереться в лимит Telegram
+        # for i in range(0, len(text), chunk):
+        #     bot.send_message(chat_id, text[i:i + chunk])
+        send_markdown_long(chat_id, text)
+
+        bot.send_message(chat_id, "✅ Утренний дайджест отправлен.")
+    except Exception as e:
+        bot.send_message(chat_id, f"❌ Ошибка при ручном запуске дайджеста: {e}")
+    finally:
+        _morning_running = False
+        try:
+            _morning_lock.release()
+        except RuntimeError:
+            pass
+
+
+def _run_manual_morning_digest_all(chat_id: int):
+    """
+    Однократная отправка утреннего дайджеста всем пользователям,
+    """
+    global _morning_running
+    try:
+        msg = bot.send_message(chat_id, "📨 Формирую утренний дайджест…")
+
+        # 1. Берём изменения за сегодня
+        # changes = get_today_partner_changes()
+        changes = get_test_digest_data()
+        report = f"WARNING!!!!!!\n AHTUNG!!!!!!!!\n SPAM!!!!!!\n ТЕСТ\n ЗАВЕРШЕНО УСПЕШНО! ПОБЕДА!"
         if not changes:
             bot.edit_message_text(
                 chat_id=chat_id,
@@ -897,21 +951,51 @@ def _run_manual_morning_digest(chat_id: int):
         )
 
         # 3. Отправляем ТОЛЬКО этому пользователю
-        chunk = 3500  # чтобы не упереться в лимит Telegram
-        for i in range(0, len(text), chunk):
-            bot.send_message(chat_id, text[i:i + chunk])
+        all_chat_ids = get_all_chat_ids()
 
-        bot.send_message(chat_id, "✅ Утренний дайджест отправлен.")
+        if not all_chat_ids:
+            bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=msg.message_id,
+                text="ℹ️ Нет пользователей в базе для отправки."
+            )
+            return
+
+        sent_count = 0
+        failed_count = 0
+
+        for user_chat_id in all_chat_ids:
+            try:
+                if user_chat_id == chat_id:
+                    continue
+                    
+                send_markdown_long(user_chat_id, text)
+                sent_count += 1
+                print(f"Удачная отправка дайджеста пользователю {user_chat_id}")
+                
+                time.sleep(0.1)
+                
+            except Exception as user_e:
+                failed_count += 1
+                print(f"⚠️ Ошибка отправки дайджеста пользователю {user_chat_id}: {user_e}")
+
+        try:
+            send_markdown_long(chat_id, text)
+            sent_count += 1
+        except Exception as e:
+            failed_count += 1
+            print(f"⚠️ Ошибка отправки дайджеста себе: {e}")
+        
+        bot.send_message(chat_id, report.strip())
+        
     except Exception as e:
-        bot.send_message(chat_id, f"❌ Ошибка при ручном запуске дайджеста: {e}")
+        bot.send_message(chat_id, f"❌ Ошибка при массовой рассылке дайджеста: {e}")
     finally:
         _morning_running = False
         try:
             _morning_lock.release()
         except RuntimeError:
             pass
-
-
 
 
 
@@ -943,6 +1027,34 @@ def morning_command(message):
         daemon=True
     ).start()
 
+
+@bot.message_handler(commands=['morning_all'])
+def morning_command_all(message):
+    """
+    Ручной запуск утренней рассылки только для отправителя.
+    Формат: /morning <secret> (секрет тот же, что и UPDATE_SECRET).
+    """
+    global _morning_running
+
+    parts = message.text.strip().split(maxsplit=1)
+    if len(parts) < 2 or parts[1].strip() != UPDATE_SECRET:
+        bot.send_message(message.chat.id, "⛔️ Неверный секрет. Формат: /morning <secret>")
+        return
+
+    if _morning_running:
+        bot.send_message(message.chat.id, "⏳ Утренняя рассылка уже выполняется. Дождитесь завершения.")
+        return
+
+    if not _morning_lock.acquire(blocking=False):
+        bot.send_message(message.chat.id, "⏳ Утренняя рассылка уже выполняется. Дождитесь завершения.")
+        return
+
+    _morning_running = True
+    threading.Thread(
+        target=_run_manual_morning_digest_all,
+        args=(message.chat.id,),
+        daemon=True
+    ).start()
 
 # ---------- KeepAlive + Flask ----------
 app = Flask(__name__)

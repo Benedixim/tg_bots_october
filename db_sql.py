@@ -4,7 +4,7 @@ import sqlite3
 import datetime
 from typing import Any, Dict, List, Tuple, Optional
 
-DB_PATH = "banks_backup_20251208_010000.db"
+DB_PATH = "banks_backup_20251215_105107.db"
 
 
 def _conn() -> sqlite3.Connection:
@@ -117,6 +117,7 @@ def get_today_partner_changes() -> list[dict]:
         partner_name,
         partner_bonus,
         bonus_unit,  # <- ДОБАВИЛИ ЭТО
+        partner_link,
         change_type: "new" | "updated",
         checked_at: "YYYY-MM-DD HH:MM:SS"
     }
@@ -160,6 +161,7 @@ def get_today_partner_changes() -> list[dict]:
                 l.partner_name,
                 l.partner_bonus,
                 l.checked_at,
+                l.partner_link,  
                 l.hist_count,
                 b.bonus_unit  -- ДОБАВИЛИ ЭТО
             FROM latest l
@@ -172,19 +174,21 @@ def get_today_partner_changes() -> list[dict]:
     finally:
         conn.close()
 
-    result = []
-    for bank_name, category_name, partner_name, partner_bonus, checked_at, hist_count, bonus_unit in rows:
+    changes = []
+    for bank_name, category_name, partner_name, partner_bonus, checked_at, partner_link, hist_count, bonus_unit in rows:
         change_type = "new" if hist_count == 1 else "updated"
-        result.append({
+        changes.append({
             "bank_name": bank_name,
             "category_name": category_name,
             "partner_name": partner_name,
             "partner_bonus": partner_bonus,
+            "bonus_unit": bonus_unit or "", 
+            "partner_link": partner_link or "#",  
             "change_type": change_type,
             "checked_at": checked_at,
-            "bonus_unit": bonus_unit or "", 
         })
-    return result
+    return changes
+
 
 # ---------- TABLE ENSURE ----------
 def ensure_categories_table(conn: Optional[sqlite3.Connection] = None) -> None:
