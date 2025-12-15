@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Tuple, Optional
 DB_PATH = "banks_backup_20251215_105107.db"
 
 
+
 def _conn() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH)
     conn.execute("PRAGMA journal_mode=WAL;")
