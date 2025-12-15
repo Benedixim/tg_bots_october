@@ -924,7 +924,6 @@ def _run_manual_morning_digest_all(chat_id: int):
         # 1. Берём изменения за сегодня
         changes = get_today_partner_changes()
 
-        report = f"WARNING!!!!!!\n AHTUNG!!!!!!!!\n SPAM!!!!!!\n ТЕСТ\n ЗАВЕРШЕНО УСПЕШНО! ПОБЕДА!"
         if not changes:
             bot.edit_message_text(
                 chat_id=chat_id,
