@@ -984,7 +984,6 @@ def _run_manual_morning_digest_all(chat_id: int):
             failed_count += 1
             print(f"⚠️ Ошибка отправки дайджеста себе: {e}")
         
-        bot.send_message(chat_id, report.strip())
         
     except Exception as e:
         bot.send_message(chat_id, f"❌ Ошибка при массовой рассылке дайджеста: {e}")
