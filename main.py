@@ -871,8 +871,7 @@ def _run_manual_morning_digest(chat_id: int):
         msg = bot.send_message(chat_id, "📨 Формирую утренний дайджест…")
 
         # 1. Берём изменения за сегодня
-        # changes = get_today_partner_changes()
-        changes = get_test_digest_data()
+        changes = get_today_partner_changes()
         if not changes:
             bot.edit_message_text(
                 chat_id=chat_id,
@@ -923,8 +922,8 @@ def _run_manual_morning_digest_all(chat_id: int):
         msg = bot.send_message(chat_id, "📨 Формирую утренний дайджест…")
 
         # 1. Берём изменения за сегодня
-        # changes = get_today_partner_changes()
-        changes = get_test_digest_data()
+        changes = get_today_partner_changes()
+
         report = f"WARNING!!!!!!\n AHTUNG!!!!!!!!\n SPAM!!!!!!\n ТЕСТ\n ЗАВЕРШЕНО УСПЕШНО! ПОБЕДА!"
         if not changes:
             bot.edit_message_text(
