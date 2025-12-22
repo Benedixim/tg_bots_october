@@ -453,6 +453,7 @@ def update_all_banks_categories(progress: ProgressFn = None) -> None:
             print(msg)
             if progress:
                 progress(done, total, msg)
+    
     # try:
     #     print("🔍 Парсим категории с ")
     #     categories = fetch_categories(bank_id=3)

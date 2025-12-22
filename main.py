@@ -11,7 +11,9 @@ import matplotlib.pyplot as plt
 from flask import Flask
 import asyncio
 from aiohttp import ClientSession
+from update_nw import fetch_categories_for_bank
 
+import db_sql
 import telebot
 from telebot import types
 from db_sql import (
@@ -35,10 +37,11 @@ from db_sql import (
     finalize_statuses_after_update,
     get_status_report,
     get_today_changes_with_status,
+    get_special_banks,
     DB_PATH
 )
 
-from updates import update_all_banks_categories
+from update_nw import update_all_banks_categories
 
 # ---------- Load .env ----------
 load_dotenv()
@@ -88,7 +91,8 @@ def start_message(message):
         return
     markup = types.InlineKeyboardMarkup(row_width=1)
     for bank_id, name, loyalty_url in banks:
-        if bank_id != 13 and bank_id != 6:
+        print(f'{bank_id}, {name}')
+        if bank_id != 13 and bank_id != 6 and bank_id != 1:
             name += " - С" 
         markup.add(types.InlineKeyboardButton(name, callback_data=f"bank_{bank_id}"))
     bot.send_message(message.chat.id, "Выберите банк:", reply_markup=markup)
@@ -176,6 +180,30 @@ def add_buttons_to_all_users(message):
     """
     bot.send_message(message.chat.id, report)
     
+from update_bnb import fetch_categories_simple_bank
+from belkart import fetch_promotions, save_belkart_items
+
+BANKS = [
+    {"id": 1, "name": "BNB", "func": fetch_categories_simple_bank},
+    {"id": 2, "name": "Belkart", "func": fetch_promotions},
+]
+
+@bot.message_handler(commands=['parse_banks'])
+def parse_banks_command(message):
+    bot.send_message(message.chat.id, "🚀 Запуск парсеров банков...")
+
+    # Последовательный запуск
+    for bank in BANKS:
+        bot.send_message(message.chat.id, f"🔹 Парсим банк {bank['name']} ({bank['id']})")
+        
+        if bank['name'] == "BNB":
+            bank['func'](bank_id=bank['id'])
+        elif bank['name'] == "Belkart":
+            items = bank['func'](bank_id=bank['id'])
+            save_belkart_items(bank['id'], items)
+
+    bot.send_message(message.chat.id, "✅ Парсинг завершён!")
+
 
 
 @bot.message_handler(commands=['start', 'menu'])
@@ -185,22 +213,46 @@ def handle_start(message):
 @bot.callback_query_handler(func=lambda call: call.data.startswith('bank_'))
 def callback_bank(call):
     bank_id = int(call.data[5:])
-    banks = get_banks()
-    selected = next((b for b in banks if b[0] == bank_id), None)
-    if selected:
-        name, loyalty_url = selected[1], selected[2]
-        if loyalty_url:
-            bot.send_message(call.message.chat.id, f"Ссылка на программу лояльности: {loyalty_url}")
 
+    if bank_id == 2:
+        partners = get_partners_latest_by_bank_category(bank_id, 0)  
+
+        if not partners:
+            bot.send_message(call.message.chat.id, "У Белкарт нет партнёров.")
+            return
+
+        cfg = fetch_partners_scrape_config(bank_id)
+        bonus_unit = cfg.get("bonus_unit", "") or ""
+
+
+        lines = ["🏦 *Белкарт — партнёры:*"]
+        for name, bonus, link in partners:
+            shown_link = link or "#"
+            bonus_display = f" — {bonus} {bonus_unit}".strip() if bonus else ""
+            lines.append(f"• [{name}]({shown_link}){bonus_display}")
+
+        reply = "\n".join(lines)
+        
+        bot.send_message(
+            call.message.chat.id,
+            reply,
+            parse_mode="Markdown",
+            disable_web_page_preview=True
+        )
+        return
+
+    # Для остальных банков — показываем категории
     categories = get_latest_categories_by_bank(bank_id)
     if not categories:
-        bot.send_message(call.message.chat.id, "Нет категорий у данного банка.")
+        bot.send_message(call.message.chat.id, "Нет категорий для этого банка.")
         return
 
     markup = types.InlineKeyboardMarkup(row_width=1)
     for cat_id, cat_name, cat_url in categories:
         markup.add(types.InlineKeyboardButton(cat_name, callback_data=f"cat_{bank_id}_{cat_id}"))
-    bot.send_message(call.message.chat.id, "Выберите категорию партнёра:", reply_markup=markup)
+
+    bot.send_message(call.message.chat.id, "Выберите категорию:", reply_markup=markup)
+
 
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('cat_'))
@@ -506,7 +558,7 @@ def nightly_scrape_loop():
         try:
             print(f"[{dt.datetime.now():%Y-%m-%d %H:%M:%S}] ▶️ Nightly categories update")
             _send_db_backup(1784338004)
-            update_all_banks_categories()
+            run_update_with_status_wrapper()
             print(f"[{dt.datetime.now():%Y-%m-%d %H:%M:%S}] ✅ Nightly update done")
         except Exception as e:
             print(f"[{dt.datetime.now():%Y-%m-%d %H:%M:%S}] ❌ Nightly update error: {e}")
@@ -547,7 +599,7 @@ def _run_manual_update_with_progress(chat_id: int):
 
         # 3) Запуск обновления с прогрессом
         tg_progress(0, 1, "Подготовка…")
-        update_all_banks_categories(progress=tg_progress)
+        run_update_with_status_wrapper(progress_callback=tg_progress)
 
         # 4) Финальный штрих
         tg_progress(1, 1, "Готово ✅")
@@ -819,7 +871,8 @@ def send_markdown_long(chat_id: int, text: str, chunk_size: int = 3500):
 
 
 def morning_digest_loop():
-    from db_sql import get_today_partner_changes  # если в отдельном модуле
+    # from db_sql import get_today_partner_changes  # если в отдельном модуле
+    from db_sql import get_today_changes_with_status
     ensure_tg_users_table()  # на всякий случай
 
     while True:
@@ -830,7 +883,8 @@ def morning_digest_loop():
             now = dt.datetime.now()
             print(f"[{now:%Y-%m-%d %H:%M:%S}] ▶️ Morning digest start")
 
-            changes = get_today_partner_changes()
+            # changes = get_today_partner_changes()
+            changes = get_today_changes_with_status()
             if not changes:
                 print(f"[{now:%Y-%m-%d %H:%M:%S}] ℹ️ Morning digest: изменений нет")
                 continue
@@ -871,7 +925,7 @@ def _run_manual_morning_digest(chat_id: int):
         msg = bot.send_message(chat_id, "📨 Формирую утренний дайджест…")
 
         # 1. Берём изменения за сегодня
-        changes = get_today_partner_changes()
+        changes = get_today_changes_with_status()
         if not changes:
             bot.edit_message_text(
                 chat_id=chat_id,
@@ -922,7 +976,7 @@ def _run_manual_morning_digest_all(chat_id: int):
         msg = bot.send_message(chat_id, "📨 Формирую утренний дайджест…")
 
         # 1. Берём изменения за сегодня
-        changes = get_today_partner_changes()
+        changes = get_today_changes_with_status()
 
         if not changes:
             bot.edit_message_text(
