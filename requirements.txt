@@ -7,3 +7,4 @@ aiohttp
 selenium
 dotenv
 bs4
+gigachat
