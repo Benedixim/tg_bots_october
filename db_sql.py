@@ -363,132 +363,127 @@ def get_latest_categories_by_bank(bank_id: int) -> List[Tuple[int, str, str]]:
 #         conn.close()
 
 # to do func fith status
+
+
+def get_unique_checked_at() -> str:
+    return datetime.datetime.utcnow().isoformat(timespec="microseconds")
+
 def save_partners(partners: List[Dict[str, Any]], bank_id: int, category_id: int) -> None:
     """
     Сохраняет партнёров с логикой статусов:
     1. Перед обновлением: все партнёры получают статус 'ready'
     2. При проверке каждого партнёра:
        - Существует (есть последняя запись) → status = 'live'
-       - Новый (первая запись) → status = 'new'
-       - Исчез (был, но нет в новых данных) → status = 'new_delete'
+       - Новый → status = 'new'
+       - Исчез → status = 'new_delete'
        - Был 'new_delete', исчез снова → status = 'delete'
     """
     conn = _conn()
     try:
         ensure_partners_table(conn)
         ensure_status_columns()  
-        
         cur = conn.cursor()
-        checked_at = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        
-   
+
+
         cur.execute("""
             UPDATE partners
-            SET status = 'ready'
-            WHERE bank_id = ? AND category_id = ?
-            AND status != 'delete'
+            SET status='ready'
+            WHERE bank_id=? AND category_id=? AND status!='delete'
         """, (bank_id, category_id))
-        
         print(f"📊 Подготовка: отмечено {cur.rowcount} партнёров как 'ready'")
-        
-   
+
+
         cur.execute("""
             SELECT DISTINCT partner_name, status
             FROM partners
-            WHERE bank_id = ? AND category_id = ?
+            WHERE bank_id=? AND category_id=?
         """, (bank_id, category_id))
-        
         current_partners = {row[0]: row[1] for row in cur.fetchall()}
-        
-       
+
         new_partner_names = set()
-        
+
         for p in partners:
             partner_name = p.get("partner_name")
             bonus = p.get("partner_bonus")
-            link = p.get("partner_link") or ""
-            
+            link = (p.get("partner_link") or "").strip()
+
             if not partner_name:
                 continue
-            
+
             new_partner_names.add(partner_name)
-            
-    
-            link = link.strip() if link else ""
-            
-     
+            checked_at = get_unique_checked_at()
+
+
             cur.execute("""
                 SELECT id, status
                 FROM partners
-                WHERE bank_id = ? AND category_id = ? AND partner_name = ?
+                WHERE bank_id=? AND category_id=? AND partner_name=?
                 AND COALESCE(NULLIF(TRIM(partner_bonus),''),'') = COALESCE(NULLIF(TRIM(?),''),'')
                 AND COALESCE(NULLIF(TRIM(partner_link),''),'') = COALESCE(NULLIF(TRIM(?),''),'')
                 ORDER BY checked_at DESC
                 LIMIT 1
             """, (bank_id, category_id, partner_name, bonus or "", link))
-            
             last = cur.fetchone()
-            
 
             if last is None:
-           
+
                 old_status = current_partners.get(partner_name)
-                
                 if old_status is None:
-                
                     status = 'new'
                 elif old_status in ['new_delete', 'delete']:
-                    # Партнёр вернулся после удаления
-                    status = 'live'
+                    status = 'live' 
                 else:
-                    # Данные изменились у существующего партнёра
                     status = 'live'
-                
-                # Сохраняем новую запись
+
                 cur.execute("""
-                    INSERT INTO partners 
+                    INSERT INTO partners
                     (bank_id, category_id, partner_name, partner_bonus, partner_link, checked_at, status)
                     VALUES (?, ?, ?, ?, ?, ?, ?)
                 """, (bank_id, category_id, partner_name, bonus, link, checked_at, status))
             else:
-                # Партнёр существует с такими же данными
+
                 last_id, last_status = last
-                
-                # Если статус был 'ready', то меняем на 'live'
                 if last_status == 'ready':
                     cur.execute("""
                         UPDATE partners
-                        SET status = 'live'
-                        WHERE id = ?
-                    """, (last_id,))
-        
-        # ШАГ 3: Помечаем отсутствующих партнёров как 'new_delete' или 'delete'
+                        SET status='live', checked_at=?
+                        WHERE id=?
+                    """, (checked_at, last_id))
+
+
         missing_partners = set(current_partners.keys()) - new_partner_names
-        
         for partner_name in missing_partners:
             old_status = current_partners[partner_name]
-            
-            # Определяем новый статус
+            checked_at = get_unique_checked_at()
             if old_status == 'new_delete':
-                # Был уже удалён, теперь окончательно удаляем
                 new_status = 'delete'
             else:
-                # Первый раз удаляем
                 new_status = 'new_delete'
-            
-            # Сохраняем запись об удалении
+
             cur.execute("""
-                INSERT INTO partners 
+                INSERT INTO partners
                 (bank_id, category_id, partner_name, partner_bonus, partner_link, checked_at, status)
                 VALUES (?, ?, ?, ?, ?, ?, ?)
             """, (bank_id, category_id, partner_name, None, None, checked_at, new_status))
-        
+
         if missing_partners:
             print(f"🗑️ Помечено как удалённые: {len(missing_partners)} партнёров")
-        
+
+
+        cur.execute("""
+            DELETE FROM partners
+            WHERE id NOT IN (
+                SELECT MAX(id)
+                FROM partners
+                WHERE bank_id=? AND category_id=? AND status='live'
+                GROUP BY partner_name
+            )
+            AND bank_id=? AND category_id=? AND status='live'
+        """, (bank_id, category_id, bank_id, category_id))
+
         conn.commit()
         print(f"✅ save_partners завершена для bank_id={bank_id}, category_id={category_id}")
-        
+
     except Exception as e:
         print(f"❌ Ошибка в save_partners: {e}")
         import traceback
@@ -556,40 +551,115 @@ def save_partners(partners: List[Dict[str, Any]], bank_id: int, category_id: int
 #     finally:
 #         conn.close()
 
-def get_partners_latest_by_bank_category(bank_id: int, category_id: int) -> List[Tuple[str, Optional[str], Optional[str]]]:
+def get_partners_latest_by_bank_category(
+    bank_id: int,
+    category_id: int
+) -> List[Tuple[str, Optional[str], Optional[str]]]:
     """
-    Возвращает список (partner_name, partner_bonus, partner_link)
-    только последние версии, БЕЗ ДУБЛЕЙ по partner_name
+    Возвращает партнёров категории (ВСЕ типы bank_id, включая Белкарт):
+    - только live / new
+    - без дубликатов
+    - всегда последняя АКТУАЛЬНАЯ запись
     """
     conn = _conn()
     try:
         cur = conn.cursor()
+
         cur.execute("""
-            SELECT partner_name, partner_bonus, partner_link
-            FROM partners
-            WHERE bank_id = ? AND category_id = ?
-            AND checked_at = (
-                SELECT MAX(p2.checked_at)
-                FROM partners p2
-                WHERE p2.bank_id = ? 
-                  AND p2.category_id = ?
-                  AND p2.partner_name = partners.partner_name
-            )
-            ORDER BY partner_name
-        """, (bank_id, category_id, bank_id, category_id))
-        
-        # Дополнительная дедубликация на уровне Python
-        seen = set()
-        result = []
-        for row in cur.fetchall():
-            partner_name = row[0]
-            if partner_name not in seen:
-                seen.add(partner_name)
-                result.append(row)
-        
-        return result
+            SELECT
+                p.partner_name,
+                p.partner_bonus,
+                p.partner_link
+            FROM partners p
+            INNER JOIN (
+                SELECT
+                    bank_id,
+                    category_id,
+                    partner_name,
+                    MAX(id) AS max_id
+                FROM partners
+                WHERE bank_id = ?
+                  AND category_id = ?
+                  AND status IN ('live', 'new')
+                GROUP BY bank_id, category_id, partner_name
+            ) latest
+              ON p.id = latest.max_id
+            WHERE p.status IN ('live', 'new')
+            ORDER BY p.partner_name COLLATE NOCASE
+        """, (bank_id, category_id))
+
+        return cur.fetchall()
+
     finally:
         conn.close()
+
+
+def search_partners(query):
+    """
+    Поиск партнёров по названию.
+    Работает с кириллицей и английским!
+    Конвертирует строчные буквы в заглавные для правильного поиска.
+    """
+    conn = _conn()
+    cur = conn.cursor()
+
+    query_normalized = query.capitalize() 
+    query_pattern = f"%{query_normalized}%"
+
+    
+    try:
+        # Ищем без COLLATE - просто прямое совпадение по нормализованному запросу
+        cur.execute("""
+            SELECT 
+                b.name AS bank_name,
+                COALESCE(c.name, 'Без категории') AS category_name,
+                p.partner_name,
+                p.partner_bonus,
+                '' AS bonus_unit,
+                p.partner_link
+            FROM partners AS p
+            JOIN banks AS b ON b.id = p.bank_id
+            LEFT JOIN categories AS c ON c.id = p.category_id
+            WHERE p.partner_name LIKE ?
+            AND (p.status IS NULL OR p.status NOT IN ('delete', 'new_delete'))
+            ORDER BY bank_name, category_name, p.partner_name
+        """, (query_pattern,))
+        
+        results = cur.fetchall()
+
+        
+        if not results:
+            # Если не нашли по capitalize, попробуем по оригиналу (для английского)
+            query_pattern_orig = f"%{query}%"
+            cur.execute("""
+                SELECT 
+                    b.name AS bank_name,
+                    COALESCE(c.name, 'Без категории') AS category_name,
+                    p.partner_name,
+                    p.partner_bonus,
+                    '' AS bonus_unit,
+                    p.partner_link
+                FROM partners AS p
+                JOIN banks AS b ON b.id = p.bank_id
+                LEFT JOIN categories AS c ON c.id = p.category_id
+                WHERE p.partner_name LIKE ? COLLATE NOCASE
+                AND (p.status IS NULL OR p.status NOT IN ('delete', 'new_delete'))
+                ORDER BY bank_name, category_name, p.partner_name
+            """, (query_pattern_orig,))
+            
+            results = cur.fetchall()
+
+        return results
+        
+    except Exception as e:
+        print(f"ERROR в search_partners: {e}")
+        import traceback
+        traceback.print_exc()
+        return []
+    finally:
+        conn.close()
+
+
 
 def search_partners_latest(query: str) -> List[Tuple[str, str, str, Optional[str], Optional[str], Optional[str]]]:
     """
@@ -898,147 +968,274 @@ def get_partners_current_status(conn, bank_id, category_id):
     
     return {row[0]: row[1] for row in cur.fetchall()}
 
-def save_partners_with_status_logic(partners: List[Dict[str, Any]], bank_id: int, category_id: int) -> None:
-    """
-    Умное сохранение партнёров с логикой статусов
-    """
-   
-    if bank_id == 2:
-        category_id = 0
+# def save_partners_with_status_logic(partners: List[Dict[str, Any]], bank_id: int, category_id: int) -> None:
+#     """
+#     Умное сохранение партнёров с логикой статусов
+#     """
+#     conn = _conn()
+#     try:
+#         cur = conn.cursor()
+#         checked_at = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         
+#         # 1. Получаем ПОСЛЕДНИЙ статус каждого партнера
+#         cur.execute("""
+#             SELECT 
+#                 p1.partner_name,
+#                 p1.status
+#             FROM partners p1
+#             WHERE p1.bank_id = ? AND p1.category_id = ?
+#             AND p1.checked_at = (
+#                 SELECT MAX(p2.checked_at)
+#                 FROM partners p2
+#                 WHERE p2.bank_id = p1.bank_id
+#                 AND p2.category_id = p1.category_id
+#                 AND p2.partner_name = p1.partner_name
+#             )
+#         """, (bank_id, category_id))
+        
+#         current_statuses = {row[0]: row[1] for row in cur.fetchall()}
+        
+#         # 2. Нормализуем имена партнеров для сравнения
+#         normalized_partners = {}
+#         for p in partners:
+#             partner_name = p.get("partner_name", "").strip()
+#             if not partner_name:
+#                 continue
+                
+#             # Нормализация имени (убираем кавычки, лишние пробелы)
+#             normalized_name = partner_name.replace('«', '').replace('»', '').replace('"', '').strip()
+            
+#             normalized_partners[normalized_name] = {
+#                 'original_name': partner_name,
+#                 'bonus': p.get("partner_bonus"),
+#                 'link': p.get("partner_link") or "",
+#                 'normalized_name': normalized_name
+#             }
+        
+#         # 3. Обрабатываем партнеров
+#         for normalized_name, data in normalized_partners.items():
+#             partner_name = data['original_name']
+#             bonus = data['bonus']
+#             link = data['link']
+            
+#             old_status = current_statuses.get(normalized_name)
+            
+#             # Логика определения статуса
+#             if old_status is None:
+#                 # Совсем новый партнер
+#                 status = 'new'
+#                 should_save = True
+                
+#             elif old_status == 'delete':
+#                 # Партнер вернулся после удаления - это ОСОБЫЙ случай!
+#                 # Нужно обновить последнюю запись, а не создавать новую
+#                 status = 'live'
+                
+#                 # Находим ID последней записи этого партнера
+#                 cur.execute("""
+#                     SELECT id FROM partners
+#                     WHERE bank_id = ? AND category_id = ? 
+#                     AND partner_name = ?
+#                     ORDER BY checked_at DESC
+#                     LIMIT 1
+#                 """, (bank_id, category_id, partner_name))
+                
+#                 last_id_result = cur.fetchone()
+#                 if last_id_result:
+#                     last_id = last_id_result[0]
+#                     # ОБНОВЛЯЕМ существующую запись
+#                     cur.execute("""
+#                         UPDATE partners 
+#                         SET status = ?,
+#                             partner_bonus = ?,
+#                             partner_link = ?,
+#                             checked_at = ?
+#                         WHERE id = ?
+#                     """, (status, bonus, link, checked_at, last_id))
+#                     should_save = False
+#                 else:
+#                     should_save = True
+                    
+#             elif old_status in ['new_delete', 'deleted']:
+#                 # Впервые удален, но вернулся
+#                 status = 'live'
+#                 should_save = True
+                
+#             else:
+#                 # Уже существует (live, new, ready)
+#                 status = old_status if old_status in ['live', 'new'] else 'live'
+                
+#                 # Проверяем, изменились ли данные
+#                 cur.execute("""
+#                     SELECT partner_bonus, partner_link
+#                     FROM partners
+#                     WHERE bank_id = ? AND category_id = ? AND partner_name = ?
+#                     ORDER BY checked_at DESC
+#                     LIMIT 1
+#                 """, (bank_id, category_id, partner_name))
+                
+#                 last = cur.fetchone()
+#                 if last:
+#                     last_bonus, last_link = last
+#                     # Сохраняем только если изменились данные
+#                     should_save = ((last_bonus or "") != (bonus or "") or 
+#                                   (last_link or "") != (link or ""))
+#                 else:
+#                     should_save = True
+            
+#             # Сохраняем новую запись только если нужно
+#             if should_save:
+#                 cur.execute("""
+#                     SELECT COUNT(*) 
+#                     FROM partners 
+#                     WHERE bank_id = ? AND category_id = ? 
+#                     AND partner_name = ? 
+#                     AND COALESCE(partner_bonus, '') = COALESCE(?, '')
+#                     AND COALESCE(partner_link, '') = COALESCE(?, '')
+#                     AND DATE(checked_at) = DATE(?)
+#                 """, (bank_id, category_id, partner_name, bonus, link, checked_at))
+                
+#                 if cur.fetchone()[0] == 0:
+#                     # Сохраняем только если нет дубля за сегодня
+#                     cur.execute("""
+#                         INSERT INTO partners 
+#                         (bank_id, category_id, partner_name, partner_bonus, partner_link, checked_at, status)
+#                         VALUES (?, ?, ?, ?, ?, ?, ?)
+#                     """, (bank_id, category_id, partner_name, bonus, link, checked_at, status))
+        
+#         # 4. Отмечаем отсутствующих партнеров
+#         current_normalized = {name.replace('«', '').replace('»', '').replace('"', '').strip(): name 
+#                             for name in current_statuses.keys()}
+#         missing = set(current_normalized.keys()) - set(normalized_partners.keys())
+        
+#         for normalized_name in missing:
+#             original_name = current_normalized[normalized_name]
+#             old_status = current_statuses.get(original_name, 'none')
+            
+#             # Определяем новый статус
+#             if old_status in ['new_delete', 'delete', 'deleted']:
+#                 new_status = 'delete'  # Окончательное удаление
+#             else:
+#                 new_status = 'new_delete'  # Первое удаление
+            
+#             # Сохраняем запись об удалении
+#             cur.execute("""
+#                 INSERT INTO partners 
+#                 (bank_id, category_id, partner_name, partner_bonus, partner_link, checked_at, status)
+#                 VALUES (?, ?, ?, NULL, NULL, ?, ?)
+#             """, (bank_id, category_id, original_name, checked_at, new_status))
+        
+#         conn.commit()
+        
+#         print(f"✅ Сохранено партнеров: {len(normalized_partners)}, удалено: {len(missing)}")
+        
+#     except Exception as e:
+#         conn.rollback()
+#         print(f"❌ Ошибка: {e}")
+#         raise
+#     finally:
+#         conn.close()
+
+def fix_status_problems():
+    """
+    Исправляет проблемные записи в БД:
+    1. Партнеры со статусом 'delete', но которые потом появились
+    2. Дублированные записи
+    """
     conn = _conn()
     try:
-        ensure_partners_table(conn)
         cur = conn.cursor()
-        checked_at = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         
-       
-        normalized_partners = []
-        for p in partners:
-            partner_name = p.get("partner_name") or p.get("name") or p.get("company") or p.get("title")
-            if not partner_name:
-                continue 
-                
-            normalized_partners.append({
-                "partner_name": partner_name,
-                "partner_bonus": p.get("partner_bonus") or p.get("bonus") or p.get("cashback"),
-                "partner_link": p.get("partner_link") or p.get("link") or "",
-            })
+        # 1. Находим партнеров, у которых последняя запись 'delete', но есть более новые записи
+        print("🔍 Ищем партнеров с неправильными статусами...")
         
-
-        if not normalized_partners:
-            print(f"ℹ️ Нет партнёров для сохранения: bank_id={bank_id}, category_id={category_id}")
-            return
+        cur.execute("""
+            SELECT DISTINCT bank_id, category_id, partner_name
+            FROM partners p1
+            WHERE p1.status = 'delete'
+            AND EXISTS (
+                SELECT 1
+                FROM partners p2
+                WHERE p2.bank_id = p1.bank_id
+                AND p2.category_id = p1.category_id
+                AND p2.partner_name = p1.partner_name
+                AND p2.checked_at > p1.checked_at
+            )
+        """)
         
+        problem_partners = cur.fetchall()
+        print(f"Найдено проблемных партнеров: {len(problem_partners)}")
         
-        current_statuses = get_partners_current_status(conn, bank_id, category_id)
-        
-
-        new_partners = {p["partner_name"]: p for p in normalized_partners}
-        
-        print(f"🔍 Статистика: текущих партнёров={len(current_statuses)}, новых партнёров={len(new_partners)}")
-        
-       
-        updated_count = 0
-        new_count = 0
-        
-        for partner_name, partner_data in new_partners.items():
-            old_status = current_statuses.get(partner_name, 'none')
+        # 2. Исправляем каждый проблемный партнер
+        for bank_id, category_id, partner_name in problem_partners:
+            print(f"Исправляем: {partner_name} (bank_id={bank_id}, category_id={category_id})")
             
-            
+            # Находим самую последнюю запись этого партнера
             cur.execute("""
-                SELECT partner_bonus, partner_link, status
+                SELECT id, status, checked_at
                 FROM partners
-                WHERE bank_id=? AND category_id=? AND partner_name=?
+                WHERE bank_id = ? AND category_id = ? AND partner_name = ?
                 ORDER BY checked_at DESC
                 LIMIT 1
             """, (bank_id, category_id, partner_name))
-
-            last = cur.fetchone()
             
-
-            if old_status == 'none':
-                status = 'new'
-                new_count += 1
-            elif old_status in ['new_delete', 'delete']:
-                status = 'live'
-            else:
-                status = old_status if old_status in ['live', 'ready', 'new'] else 'live'
-            
-            should_save = False
-            if not last:
-                should_save = True
-            else:
-                last_bonus, last_link, last_status = last
-                current_bonus = partner_data.get("partner_bonus") or ""
-                current_link = partner_data.get("partner_link") or ""
+            latest = cur.fetchone()
+            if latest:
+                latest_id, latest_status, latest_checked = latest
                 
-                if (last_bonus or "") != (current_bonus or "") or \
-                   (last_link or "") != (current_link or "") or \
-                   (last_status or "") != (status or ""):
-                    should_save = True
-            
-            if should_save:
-                cur.execute("""
-                    INSERT INTO partners 
-                    (bank_id, category_id, partner_name, partner_bonus, partner_link, checked_at, status)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
-                """, (
-                    bank_id, category_id,
-                    partner_name,
-                    partner_data.get("partner_bonus"),
-                    partner_data.get("partner_link") or "",
-                    checked_at,
-                    status
-                ))
-                
-                if old_status != status:
+                # Если последняя запись не 'delete', меняем статус у записи 'delete' на 'live'
+                if latest_status != 'delete':
+                    # Находим запись с 'delete'
                     cur.execute("""
-                        INSERT INTO status_log (partner_name, bank_id, category_id, old_status, new_status)
-                        VALUES (?, ?, ?, ?, ?)
-                    """, (partner_name, bank_id, category_id, old_status, status))
-                
-                updated_count += 1
+                        SELECT id FROM partners
+                        WHERE bank_id = ? AND category_id = ? AND partner_name = ?
+                        AND status = 'delete'
+                        ORDER BY checked_at DESC
+                        LIMIT 1
+                    """, (bank_id, category_id, partner_name))
+                    
+                    delete_record = cur.fetchone()
+                    if delete_record:
+                        delete_id = delete_record[0]
+                        # Обновляем статус на 'live'
+                        cur.execute("""
+                            UPDATE partners
+                            SET status = 'live'
+                            WHERE id = ?
+                        """, (delete_id,))
+                        print(f"  ✓ Обновлен статус записи {delete_id} с 'delete' на 'live'")
         
-
-        deleted_count = 0
-        for partner_name in set(current_statuses.keys()) - set(new_partners.keys()):
-            old_status = current_statuses[partner_name]
-            
-
-            if old_status in ['live', 'ready', 'new']:
-                status = 'new_delete'
-                
-                cur.execute("""
-                    INSERT INTO partners 
-                    (bank_id, category_id, partner_name, partner_bonus, partner_link, checked_at, status)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
-                """, (
-                    bank_id, category_id,
-                    partner_name,
-                    None,
-                    None,
-                    checked_at,
-                    status
-                ))
-                
-                cur.execute("""
-                    INSERT INTO status_log (partner_name, bank_id, category_id, old_status, new_status)
-                    VALUES (?, ?, ?, ?, ?)
-                """, (partner_name, bank_id, category_id, old_status, status))
-                
-                deleted_count += 1
+        # 3. Удаляем дубликаты (оставляем только последнюю запись для каждого партнера)
+        print("\n🔍 Удаляем дубликаты...")
+        
+        cur.execute("""
+            DELETE FROM partners
+            WHERE id NOT IN (
+                SELECT MAX(id)
+                FROM partners
+                GROUP BY bank_id, category_id, partner_name, DATE(checked_at)
+            )
+            AND status != 'delete'  -- Не трогаем записи об удалении
+        """)
+        
+        deleted_duplicates = cur.rowcount
+        print(f"Удалено дубликатов: {deleted_duplicates}")
         
         conn.commit()
         
+        return {
+            'fixed_partners': len(problem_partners),
+            'deleted_duplicates': deleted_duplicates
+        }
+        
     except Exception as e:
-        print(f"❌ Ошибка при сохранении партнёров: {e}")
-        import traceback
-        traceback.print_exc()
+        conn.rollback()
+        print(f"❌ Ошибка: {e}")
+        raise
     finally:
         conn.close()
 
-
+        
 def prepare_statuses_for_update():
     """
     Подготовка статусов перед обновлением:
@@ -1079,39 +1276,196 @@ def prepare_statuses_for_update():
     finally:
         conn.close()
 
-def finalize_statuses_after_update():
+def save_partners_with_status_logic(partners: List[Dict[str, Any]], bank_id: int, category_id: int) -> None:
     """
-    Финальная обработка после обновления:
-    - ready → live
+    Сохраняет партнёров БЕЗ ДУБЛИКАТОВ с системой статусов:
+    1. Дедупликация ДО сохранения (убираем дубли в текущем пакете)
+    2. Сравнение с БД (проверяем, есть ли такой партнёр уже)
+    3. Статусы: live (существует), new (новый), new_delete (удалён в первый раз), delete (окончательно)
+    """
+    conn = _conn()
+    try:
+        ensure_partners_table(conn)
+        ensure_status_columns()
+        cur = conn.cursor()
+        checked_at = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        # 1️⃣ ДЕДУПЛИКАЦИЯ ВХОДЯЩЕГО ПАКЕТА
+        # Убираем дубли внутри одного пакета партнёров
+        deduplicated = {}
+        for p in partners:
+            name = (p.get("partner_name") or "").strip()
+            bonus = (p.get("partner_bonus") or "").strip() or None
+            link = (p.get("partner_link") or "").strip() or ""
+            
+            if not name:
+                continue
+            
+            # Ключ: (name, bonus, link) - уникальная комбинация
+            key = (name, bonus or "", link)
+            
+            # Берём первое появление, остальные дубли пропускаем
+            if key not in deduplicated:
+                deduplicated[key] = {
+                    "partner_name": name,
+                    "partner_bonus": bonus,
+                    "partner_link": link,
+                }
+            else:
+                print(f"⏭️ Дубль в пакете: {name} | {bonus} | {link}")
+        
+        new_partners = list(deduplicated.values())
+        print(f"📦 Входящий пакет: {len(partners)} → {len(new_partners)} (после дедупл.)")
+
+        # 2️⃣ ПОМЕЧАЕМ СТАРЫЕ КАК READY
+        cur.execute("""
+            UPDATE partners
+            SET status='ready'
+            WHERE bank_id=? AND category_id=? AND status NOT IN ('delete')
+        """, (bank_id, category_id))
+
+        # 3️⃣ ПОЛУЧАЕМ ТЕКУЩИЕ ПАРТНЁРЫ В БД (КРОМЕ delete)
+        cur.execute("""
+            SELECT DISTINCT partner_name, partner_bonus, partner_link, id, status
+            FROM partners
+            WHERE bank_id=? AND category_id=? AND status NOT IN ('delete')
+            ORDER BY partner_name
+        """, (bank_id, category_id))
+        
+        db_partners = {}  # key → (id, status)
+        for row in cur.fetchall():
+            name, bonus, link, pid, status = row
+            key = (name, bonus or "", link or "")
+            db_partners[key] = (pid, status)
+
+        print(f"🗄️ В БД: {len(db_partners)} партнёров")
+
+        # 4️⃣ ОБРАБАТЫВАЕМ НОВЫЙ ПАКЕТ
+        processed_keys = set()
+        new_count = 0
+        updated_count = 0
+
+        for p in new_partners:
+            name = p.get("partner_name")
+            bonus = p.get("partner_bonus")
+            link = p.get("partner_link") or ""
+            
+            key = (name, bonus or "", link)
+            processed_keys.add(key)
+
+            # Проверяем, есть ли этот партнёр в БД
+            if key in db_partners:
+                # Партнёр существует - обновляем его статус на live
+                pid, old_status = db_partners[key]
+                if old_status == 'ready':
+                    cur.execute(
+                        "UPDATE partners SET status='live', checked_at=? WHERE id=?",
+                        (checked_at, pid)
+                    )
+                    updated_count += 1
+                # Если статус уже live - ничего не делаем
+            else:
+                # Новый партнёр - вставляем
+                cur.execute("""
+                    INSERT INTO partners
+                    (bank_id, category_id, partner_name, partner_bonus, partner_link, checked_at, status)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                """, (bank_id, category_id, name, bonus, link, checked_at, 'new'))
+                new_count += 1
+
+        # 5️⃣ ОБРАБОТАЕМ УДАЛЁННЫХ ПАРТНЁРОВ
+        # Партнёры, которые были в БД, но НЕ в новом пакете
+        missing_keys = set(db_partners.keys()) - processed_keys
+        deleted_count = 0
+
+        for key in missing_keys:
+            name, bonus, link = key
+            pid, old_status = db_partners[key]
+            
+            if old_status == 'new_delete':
+                # Уже был помечен как new_delete - теперь delete
+                cur.execute(
+                    "UPDATE partners SET status='delete', checked_at=? WHERE id=?",
+                    (checked_at, pid)
+                )
+            else:
+                # Первый раз удалён - new_delete
+                cur.execute("""
+                    INSERT INTO partners
+                    (bank_id, category_id, partner_name, partner_bonus, partner_link, checked_at, status)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                """, (bank_id, category_id, name, bonus, link, checked_at, 'new_delete'))
+            
+            deleted_count += 1
+
+        # 6️⃣ ОЧИСТКА - УДАЛЯЕМ СТАРЫЕ ДУБЛИ ready (оставляем только live)
+        cur.execute("""
+            DELETE FROM partners
+            WHERE status='ready' AND id NOT IN (
+                SELECT MAX(id)
+                FROM partners
+                WHERE bank_id=? AND category_id=? AND status='live'
+                GROUP BY partner_name, COALESCE(partner_bonus, ''), COALESCE(partner_link, '')
+            ) AND bank_id=? AND category_id=?
+        """, (bank_id, category_id, bank_id, category_id))
+        
+        cleanup_count = cur.rowcount
+
+        conn.commit()
+        
+        print(f"✅ Результат сохранения:")
+        print(f"   Новых: {new_count}")
+        print(f"   Обновлено: {updated_count}")
+        print(f"   Удалено: {deleted_count}")
+        print(f"   Очищено дублей: {cleanup_count}")
+
+    except Exception as e:
+        conn.rollback()
+        print(f"❌ Ошибка в save_partners_with_status_logic: {e}")
+        import traceback
+        traceback.print_exc()
+    finally:
+        conn.close()
+
+
+
+
+def finalize_statuses_after_update() -> int:
+    """
+    Финальная обработка после парсинга:
+    - ready → live только для последних записей
+    - удаляет дубликаты live (оставляет последнюю запись)
     """
     conn = _conn()
     try:
         cur = conn.cursor()
-        
+        # Финализируем ready → live для последних записей
         cur.execute("""
             UPDATE partners 
-            SET status = 'live'
-            WHERE status = 'ready'
+            SET status='live'
+            WHERE status='ready'
             AND id IN (
-                SELECT p.id
-                FROM partners p
-                INNER JOIN (
-                    SELECT bank_id, category_id, partner_name, MAX(checked_at) as max_checked
-                    FROM partners
-                    GROUP BY bank_id, category_id, partner_name
-                ) latest ON p.bank_id = latest.bank_id 
-                    AND p.category_id = latest.category_id 
-                    AND p.partner_name = latest.partner_name 
-                    AND p.checked_at = latest.max_checked
+                SELECT MAX(id)
+                FROM partners
+                GROUP BY bank_id, category_id, partner_name
             )
         """)
-        
-        updated = cur.rowcount
+        # Удаляем дубликаты live
+        cur.execute("""
+            DELETE FROM partners
+            WHERE status='live' AND id NOT IN (
+                SELECT MAX(id)
+                FROM partners
+                WHERE status='live'
+                GROUP BY bank_id, category_id, partner_name
+            )
+        """)
+        removed = cur.rowcount
         conn.commit()
-        return updated
-        
+        return removed
     finally:
         conn.close()
+
 
 def cleanup_deleted_partners():
     """Удаляет партнёров со статусом 'delete'"""

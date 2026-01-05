@@ -18,10 +18,12 @@ import telebot
 from telebot import types
 from db_sql import (
     get_banks,
+    fix_status_problems,
     get_latest_categories_by_bank,
     get_partners_latest_by_bank_category,
     search_partners_latest,
     get_partner_counts_by_bank,
+    search_partners,
     get_bank_name,  
     backup_database,   # <— НОВОЕ
     remember_user, 
@@ -53,31 +55,65 @@ bot = telebot.TeleBot(TOKEN)
 
 
 # ---------- Plot ----------
+# Замените эту функцию в main.py
+
 def plot_partners_by_bank(bank_id: int) -> str:
+
     bank_name = get_bank_name(bank_id)
     data = get_partner_counts_by_bank(bank_id)
+    
+
+    data = [(cat, count) for cat, count in data if cat and cat.strip() and count > 0]
+    
+    seen = {}
+    unique_data = []
+    for cat, count in data:
+        cat_lower = cat.lower().strip()
+        if cat_lower not in seen:
+            seen[cat_lower] = (cat, count)
+            unique_data.append((cat, count))
+    
+    data = unique_data
+    
+    if not data:
+        print(f"Нет данных для графика банка {bank_name}")
+        import tempfile
+        with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.png') as f:
+            return f.name
+    
     categories = [row[0] for row in data]
     counts = [row[1] for row in data]
 
+    print(f"   Создаю график для {bank_name}")
+    print(f"   Категорий: {len(categories)}")
+    print(f"   Данные: {list(zip(categories, counts))}")
+
     plt.figure(figsize=(12, 6))
-    bars = plt.bar(categories, counts)
-    plt.xlabel("Категории")
-    plt.ylabel("Количество партнёров")
-    plt.title(f"Партнёры по категориям — {bank_name}")  # ← название банка в заголовке
+    bars = plt.bar(range(len(categories)), counts, color='#1f77b4')
+    
+    plt.xlabel("Категории", fontsize=12)
+    plt.ylabel("Количество партнёров", fontsize=12)
+    plt.title(f"Партнёры по категориям — {bank_name}", fontsize=14, fontweight='bold')
     plt.grid(axis="y", linestyle="--", alpha=0.7)
-    plt.xticks(rotation=45, ha='right', fontsize=10)
+    
+
+    plt.xticks(range(len(categories)), categories, rotation=45, ha='right', fontsize=10)
     plt.tight_layout()
 
-    # подписи над столбцами
-    for bar, value in zip(bars, counts):
-        h = bar.get_height()
-        plt.text(bar.get_x() + bar.get_width() / 2, h, f"{int(value)}", ha="center", va="bottom", fontsize=9)
 
-    # уникальное имя файла
+    for i, (bar, value) in enumerate(zip(bars, counts)):
+        height = bar.get_height()
+        plt.text(bar.get_x() + bar.get_width() / 2, height, f"{int(value)}", 
+                ha="center", va="bottom", fontsize=10, fontweight='bold')
+
+
     safe_name = "".join(ch for ch in bank_name if ch.isalnum() or ch in ("_", "-")).strip("_-")
     out = f"partners_chart_{bank_id}_{safe_name}.png"
-    plt.savefig(out)
+    
+    print(f"   Сохраняю в: {out}")
+    plt.savefig(out, dpi=100, bbox_inches='tight')
     plt.close()
+    
     return out
 
 
@@ -214,6 +250,13 @@ def handle_start(message):
 def callback_bank(call):
     bank_id = int(call.data[5:])
 
+    banks = get_banks()
+    selected = next((b for b in banks if b[0] == bank_id), None)
+    if selected:
+        name, loyalty_url = selected[1], selected[2]
+        if loyalty_url:
+            bot.send_message(call.message.chat.id, f"Ссылка на программу лояльности: {loyalty_url}")
+
     if bank_id == 2:
         partners = get_partners_latest_by_bank_category(bank_id, 0)  
 
@@ -255,45 +298,78 @@ def callback_bank(call):
 
 
 
+# Исправление в main.py - функция callback_category
+
 @bot.callback_query_handler(func=lambda call: call.data.startswith('cat_'))
 def callback_category(call):
-    _, bank_id, cat_id = call.data.split('_', 2)
-    partners = get_partners_latest_by_bank_category(int(bank_id), int(cat_id))
-    if not partners:
-        bot.send_message(call.message.chat.id, "Нет партнёров для этой категории.")
+    parts = call.data.split('_', 2)
+    if len(parts) != 3:
+        bot.send_message(call.message.chat.id, "❌ Ошибка обработки категории")
+        return
+    
+    _, bank_id_str, cat_id_str = parts
+    try:
+        bank_id = int(bank_id_str)
+        cat_id = int(cat_id_str)
+    except ValueError:
+        bot.send_message(call.message.chat.id, "❌ Неверный формат данных")
         return
 
-     # ← НОВОЕ: берём bonus_unit через db_sql, а не через sqlite напрямую
-    cfg = fetch_partners_scrape_config(bank_id)
-    bonus_unit = cfg.get("bonus_unit", "") or ""
+    # Получаем партнёров
+    partners = get_partners_latest_by_bank_category(bank_id, cat_id)
+    
+    if not partners:
+        bot.send_message(call.message.chat.id, "⚠️ Нет партнёров для этой категории")
+        return
 
-    partner_name, cat_link = get_categories(cat_id)
-    bank_name = get_banks_name(bank_id)
+    # Получаем конфиг бонусов и информацию о категории
+    try:
+        cfg = fetch_partners_scrape_config(bank_id)
+        bonus_unit = cfg.get("bonus_unit", "") or ""
+    except Exception:
+        bonus_unit = ""
 
-    reply = f'Партнёры категории [{partner_name}]({cat_link}), {bank_name}\n\n'
+    try:
+        cat_name, cat_link = get_categories(cat_id)
+    except Exception:
+        cat_name = "Категория"
+        cat_link = "#"
+
+    try:
+        bank_name = get_banks_name(bank_id)
+    except Exception:
+        bank_name = f"Банк {bank_id}"
+
+    # Формируем сообщение
+    reply = f'Партнёры категории [{cat_name}]({cat_link}), {bank_name}\n\n'
+    
     for name, bonus, link in partners:
         shown_link = link or "#"
-
-        # ✅ как ты хотел: выводим бонус только если он есть, в формате как в /search
-        bonus_display = f" — {bonus} {bonus_unit}".strip() if bonus else ""
+        
+        # Бонус отображаем только если есть
+        if bonus and bonus.strip():
+            bonus_display = f" – {bonus} {bonus_unit}".strip()
+        else:
+            bonus_display = ""
 
         reply += f"- [{name}]({shown_link}){bonus_display}\n"
-    # reply = "Партнёры данной категории:\n\n"
-    # for name, bonus, link in partners:
-    #     if link and not link.startswith("http"):
-    #         # если понадобится, можно хранить домен в banks и добавлять его тут
-    #         pass
-    #     bonus_display = bonus if bonus else "—"
-    #     shown_link = link if link else "#"
-    #     reply += f"- [{name}]({shown_link}) — бонус: {bonus_display}\n"
 
-
-        #не знает
-        #bonus_disp = f" — {bonus} {bonus_unit}".strip() if bonus else ""
-        #lines.append(f"- [{name}]({shown_link}){bonus_disp}")
-
-    bot.send_message(call.message.chat.id, reply, parse_mode='Markdown', disable_web_page_preview=True)
-
+    # Отправляем сообщение
+    try:
+        bot.send_message(
+            call.message.chat.id,
+            reply,
+            parse_mode='Markdown',
+            disable_web_page_preview=True
+        )
+    except Exception as e:
+        print(f"⚠️ Ошибка отправки сообщения: {e}")
+        # Отправляем упрощённую версию без markdown
+        simple_reply = f"Партнёры {cat_name} ({bank_name}):\n\n"
+        for name, bonus, link in partners:
+            bonus_display = f" – {bonus}" if bonus else ""
+            simple_reply += f"• {name}{bonus_display}\n"
+        bot.send_message(call.message.chat.id, simple_reply)
 
 
 async def update_all_banks_with_status(progress_callback=None):
@@ -508,19 +584,27 @@ def search_command(message):
     bot.register_next_step_handler(msg, perform_search)
 
 
+
 def perform_search(message):
     query = message.text.strip()
+    
+    print(f"DEBUG: perform_search query = '{query}'")  # Логируем входной запрос
+    
     if not query:
         bot.send_message(message.chat.id, "Пустой запрос. Введите имя снова командой /search.")
         return
 
-    results = search_partners_latest(query)
+    results = search_partners(query)
+    
+    print(f"DEBUG: results = {results}")  # Логируем результаты
+    
     if not results:
-        bot.send_message(message.chat.id, f"Ничего не найдено по запросу «{query}».")
+        bot.send_message(message.chat.id, f"❌ Ничего не найдено по запросу «{query}».")
         return
 
-    # grouped[bank][category] = list(partners)
+    from collections import defaultdict
     grouped = defaultdict(lambda: defaultdict(list))
+    
     for bank_name, category_name, partner_name, bonus, bonus_unit, link in results:
         grouped[bank_name][category_name].append({
             "name": partner_name,
@@ -530,6 +614,7 @@ def perform_search(message):
         })
 
     lines = [f"🔎 Найдено совпадений: {len(results)}"]
+    
     for bank, cats in grouped.items():
         lines.append(f"\n🏦 *{bank}*")
         for category, partners in cats.items():
@@ -538,9 +623,12 @@ def perform_search(message):
                 bonus_disp = f" — {p['bonus']} {p['bonus_unit']}".strip() if p['bonus'] else ""
                 lines.append(f"    [{p['name']}]({p['link']}) {bonus_disp}")
 
-    bot.send_message(message.chat.id, "\n".join(lines), parse_mode="Markdown", disable_web_page_preview=True)
-
-
+    bot.send_message(
+        message.chat.id, 
+        "\n".join(lines), 
+        parse_mode="Markdown", 
+        disable_web_page_preview=True
+    )
 # ---------- Nightly Scheduler (01:00) ----------
 def _seconds_until_next_1am(now: dt.datetime | None = None) -> int:
     now = now or dt.datetime.now()
@@ -743,9 +831,9 @@ def format_changes_message(changes: list[dict]) -> str:
                 # Определяем эмодзи по типу изменения
                 change_type = p.get("change_type", "updated")
                 if change_type == "new":
-                    emoji = "🆕"
+                    emoji = "✅"
                 elif change_type == "deleted":
-                    emoji = "🗑️"
+                    emoji = "❌"
                 else:
                     emoji = "🔁"
                
@@ -773,6 +861,34 @@ def format_changes_message(changes: list[dict]) -> str:
 
     return "\n".join(lines).strip()
 
+
+
+# Команда для бота
+@bot.message_handler(commands=['fix_status'])
+def fix_status_command(message):
+    """Исправляет проблемы со статусами в БД"""
+    parts = message.text.strip().split()
+    if len(parts) < 2 or parts[1] != 'qwerty11':
+        bot.send_message(message.chat.id, "⛔️ Неверный секрет")
+        return
+    
+    try:
+        bot.send_message(message.chat.id, "🔧 Исправляю проблемы со статусами...")
+        result = fix_status_problems()
+        
+        report = f"""
+        ✅ Исправление завершено:
+        
+        • Исправлено партнеров: {result['fixed_partners']}
+        • Удалено дубликатов: {result['deleted_duplicates']}
+        
+        Теперь партнеры со статусом 'delete' не будут создавать новых записей при повторном появлении.
+        """
+        
+        bot.send_message(message.chat.id, report)
+        
+    except Exception as e:
+        bot.send_message(message.chat.id, f"❌ Ошибка: {str(e)}")
 
 @bot.message_handler(commands=['db_digest'])
 def db_digest_command(message):
@@ -917,7 +1033,7 @@ _morning_running = False
 
 def _run_manual_morning_digest(chat_id: int):
     """
-    Однократная отправка утреннего дайджеста ТОЛЬКО пользователю,
+    Одноразовая отправка утреннего дайджеста пользователю,
     который вызвал команду /morning <secret>.
     """
     global _morning_running
@@ -926,6 +1042,7 @@ def _run_manual_morning_digest(chat_id: int):
 
         # 1. Берём изменения за сегодня
         changes = get_today_changes_with_status()
+        
         if not changes:
             bot.edit_message_text(
                 chat_id=chat_id,
@@ -934,14 +1051,17 @@ def _run_manual_morning_digest(chat_id: int):
             )
             return
 
-        # 2. Формируем текст
+        # 2. Форматируем текст
         text = format_changes_message(changes)
-        if not text:
+        
+        # ✅ Проверяем, не пуста ли строка
+        if not text or not text.strip():
             bot.edit_message_text(
                 chat_id=chat_id,
                 message_id=msg.message_id,
-                text="ℹ️ Не удалось сформировать текст дайджеста."
+                text="⚠️ Не удалось сформировать дайджест (данные пусты). Попробуйте позже."
             )
+            print(f"⚠️ Дайджест пуст после форматирования")
             return
 
         bot.edit_message_text(
@@ -950,15 +1070,116 @@ def _run_manual_morning_digest(chat_id: int):
             text="📨 Отправляю дайджест…"
         )
 
-        # # 3. Отправляем ТОЛЬКО этому пользователю
-        # chunk = 3500  # чтобы не упереться в лимит Telegram
-        # for i in range(0, len(text), chunk):
-        #     bot.send_message(chat_id, text[i:i + chunk])
+        # 3. Отправляем длинный текст (может быть разбит на несколько сообщений)
         send_markdown_long(chat_id, text)
 
         bot.send_message(chat_id, "✅ Утренний дайджест отправлен.")
+        
     except Exception as e:
-        bot.send_message(chat_id, f"❌ Ошибка при ручном запуске дайджеста: {e}")
+        print(f"❌ Ошибка при ручном запуске дайджеста: {e}")
+        import traceback
+        traceback.print_exc()
+        try:
+            bot.send_message(chat_id, f"❌ Ошибка при отправке дайджеста: {str(e)[:100]}")
+        except:
+            pass
+    finally:
+        _morning_running = False
+        try:
+            _morning_lock.release()
+        except RuntimeError:
+            pass
+
+
+def _run_manual_morning_digest_all(chat_id: int):
+    """
+    Массовая отправка утреннего дайджеста всем пользователям.
+    """
+    global _morning_running
+    try:
+        msg = bot.send_message(chat_id, "📨 Формирую утренний дайджест для всех…")
+
+        # 1. Берём изменения за сегодня
+        changes = get_today_changes_with_status()
+
+        if not changes:
+            bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=msg.message_id,
+                text="ℹ️ За сегодня нет новых или изменённых партнёров. Отправка отменена."
+            )
+            return
+
+        # 2. Форматируем текст
+        text = format_changes_message(changes)
+        
+        # ✅ Проверяем, не пуста ли строка
+        if not text or not text.strip():
+            bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=msg.message_id,
+                text="⚠️ Не удалось сформировать дайджест (данные пусты)."
+            )
+            print(f"⚠️ Дайджест пуст после форматирования")
+            return
+
+        bot.edit_message_text(
+            chat_id=chat_id,
+            message_id=msg.message_id,
+            text="📨 Отправляю дайджест всем пользователям…"
+        )
+
+        # 3. Получаем всех пользователей
+        all_chat_ids = get_all_chat_ids()
+
+        if not all_chat_ids:
+            bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=msg.message_id,
+                text="ℹ️ Нет пользователей в базе для отправки."
+            )
+            return
+
+        sent_count = 0
+        failed_count = 0
+
+        # 4. Отправляем дайджест каждому пользователю
+        for user_chat_id in all_chat_ids:
+            try:
+                if user_chat_id == chat_id:
+                    continue
+                    
+                send_markdown_long(user_chat_id, text)
+                sent_count += 1
+                print(f"✅ Отправлена дайджест пользователю {user_chat_id}")
+                
+                time.sleep(0.1)
+                
+            except Exception as user_e:
+                failed_count += 1
+                print(f"⚠️ Ошибка отправки дайджеста пользователю {user_chat_id}: {user_e}")
+
+        # 5. Отправляем себе
+        try:
+            send_markdown_long(chat_id, text)
+            sent_count += 1
+        except Exception as e:
+            failed_count += 1
+            print(f"⚠️ Ошибка отправки дайджеста себе: {e}")
+        
+        # 6. Отправляем отчёт
+        report = f"✅ Дайджест отправлен:\n• Успешно: {sent_count}\n• Ошибок: {failed_count}"
+        bot.send_message(chat_id, report)
+        print(report)
+        
+    except Exception as e:
+        print(f"❌ Ошибка при массовой отправке дайджеста: {e}")
+        import traceback
+        traceback.print_exc()
+        try:
+            bot.send_message(chat_id, f"❌ Ошибка при отправке: {str(e)[:100]}")
+        except:
+            pass
     finally:
         _morning_running = False
         try:

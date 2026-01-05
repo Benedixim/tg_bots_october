@@ -21,7 +21,8 @@ from db_sql import (
     fetch_categories_scrape_config,
     fetch_partners_scrape_config,
     save_single_category,
-    save_partners,
+    save_partners_with_status_logic,
+    finalize_statuses_after_update,
 )
 
 import sqlite3
@@ -29,12 +30,14 @@ import datetime
 
 ProgressFn = Optional[Callable[[int, int, str], None]]  
 
+from kaktus import fetch_cactus_partners
 from update_bnb import fetch_categories_simple_bank
 
 PARSER_REGISTRY = {
     "default": None,
     "simple_js_categories": fetch_categories_simple_bank,
-    "belkart": fetch_promotions,  
+    "belkart": fetch_promotions,
+    "cactus": fetch_cactus_partners,  # добавить нового парсера
 }
 
 def _driver() -> webdriver.Chrome:
@@ -425,7 +428,7 @@ def _parse_partners(
     # 3. Сохраняем партнёров
     try:
         print("💾 Сохраняем партнёров через save_partners...")
-        save_partners(result, bank_id, category_id)
+        save_partners_with_status_logic(result, bank_id, category_id)
         msg_saved = f"{cat_prefix} ✅ Сохранено партнёров: {len(result)}"
         print(msg_saved)
         if progress:
@@ -477,6 +480,7 @@ def update_all_banks_categories(progress: ProgressFn = None) -> None:
                 banks_done=done,
                 banks_total=total,
             )
+            finalize_statuses_after_update()
             done += 1
             if progress:
                 progress(done, total, f"[bank {bank_id}] ✅ Готово по банку")
