@@ -33,7 +33,7 @@ from belkart import fetch_promotions
 
 PARSER_REGISTRY = {
     "default": None,
-    "simple_js_categories": fetch_categories_simple_bank,
+    #"simple_js_categories": fetch_categories_simple_bank,
     "belkart": fetch_promotions,
     "cactus": fetch_cactus_partners,
 }
@@ -127,7 +127,8 @@ def fetch_categories_for_bank(
     driver = _get_driver()
     
     try:
-        note_start = f"[bank {bank_id}] Открываем {url}"
+        if bank_id != 1:
+            note_start = f"[bank {bank_id}] Открываем {url}"
         print(note_start)
         if progress:
             progress(banks_done, banks_total, note_start)
