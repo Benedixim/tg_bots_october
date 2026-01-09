@@ -1,6 +1,7 @@
-# category_scraper.py (update.py)
+# update_nw.py
 import traceback
 import time
+import gc
 from typing import Dict, Any, List, Callable, Optional
 from urllib.parse import urljoin
 
@@ -14,7 +15,6 @@ from selenium.common.exceptions import (
     ElementClickInterceptedException,
     StaleElementReferenceException,
 )
-from belkart import fetch_promotions 
 
 from db_sql import (
     get_all_bank_ids,
@@ -25,34 +25,56 @@ from db_sql import (
     finalize_statuses_after_update,
 )
 
-import sqlite3
-import datetime
-
-ProgressFn = Optional[Callable[[int, int, str], None]]  
+ProgressFn = Optional[Callable[[int, int, str], None]]
 
 from kaktus import fetch_cactus_partners
 from update_bnb import fetch_categories_simple_bank
+from belkart import fetch_promotions
 
 PARSER_REGISTRY = {
     "default": None,
     "simple_js_categories": fetch_categories_simple_bank,
     "belkart": fetch_promotions,
-    "cactus": fetch_cactus_partners,  # добавить нового парсера
+    "cactus": fetch_cactus_partners,
 }
 
+# Глобальный драйвер для переиспользования
+_global_driver = None
+
+def _get_driver() -> webdriver.Chrome:
+    """Переиспользуем драйвер для снижения утечек памяти"""
+    global _global_driver
+    
+    if _global_driver is None:
+        opts = Options()
+        opts.add_argument("--headless=new")
+        opts.add_argument("--no-sandbox")
+        opts.add_argument("--disable-dev-shm-usage")
+        opts.add_argument("--window-size=1920,1080")
+        opts.add_argument("--disable-gpu")
+        opts.add_argument("--disable-extensions")
+        opts.add_argument("--disable-plugins")
+        # Ограничиваем использование памяти
+        opts.add_argument("--memory-pressure-off")
+        
+        _global_driver = webdriver.Chrome(options=opts)
+    
+    return _global_driver
+
+def _cleanup_driver():
+    """Очищаем глобальный драйвер"""
+    global _global_driver
+    try:
+        if _global_driver:
+            _global_driver.quit()
+            _global_driver = None
+    except:
+        pass
+    gc.collect()
+
 def _driver() -> webdriver.Chrome:
-    #proxy = "http://jWYdGR:hxt7NC@91.195.125.187:8000"   # твой прокси
-
-    opts = Options()
-    # opts.page_load_strategy = 'none'  # можно включить, если нужно ускорение
-    #opts.add_argument(f"--proxy-server={proxy}")
-    opts.add_argument("--headless=new")
-    opts.add_argument("--no-sandbox")
-    opts.add_argument("--disable-dev-shm-usage")
-    opts.add_argument("--window-size=1920,1080")
-    drv = webdriver.Chrome(options=opts)
-    return drv
-
+    """Для совместимости с kaktus.py"""
+    return _get_driver()
 
 def _click_cookie(driver: webdriver.Chrome, cookie_text: str) -> None:
     if not cookie_text:
@@ -64,8 +86,7 @@ def _click_cookie(driver: webdriver.Chrome, cookie_text: str) -> None:
         driver.execute_script("arguments[0].click();", btn)
         print("✅ Cookie окно закрыто")
     except TimeoutException:
-        print("⚠️ Окно cookie не появилось — продолжаем")
-
+        print("⚠️ Окно cookie не появилось – продолжаем")
 
 def fetch_categories_for_bank(
     bank_id: int,
@@ -73,12 +94,8 @@ def fetch_categories_for_bank(
     banks_done: int = 0,
     banks_total: int = 0,
 ) -> List[Dict[str, Any]]:
-    """
-    Router:
-    - default → старый парсер (этот файл)
-    - simple_js_categories → отдельный JS-парсер
-    """
-
+    """Router с поддержкой разных парсеров"""
+    
     cfg = fetch_categories_scrape_config(bank_id)
     parser_type = cfg.get("parser_type", "default")
 
@@ -98,16 +115,8 @@ def fetch_categories_for_bank(
     if not container_selector:
         raise ValueError(
             f"[bank {bank_id}] container_selector пустой для default-парсера"
-    )
-    """
-    Парсит категории и партнёров для одного банка.
+        )
 
-    ДОБАВЛЕНО:
-    - progress-логирование по категориям:
-      * старт категории
-      * успешное завершение
-      * ошибки (категория не найдена, ошибки при парсинге партнёров и т.п.)
-    """
     url = cfg["url"]
     if not url:
         msg = f"bank_id={bank_id} has empty loyalty_url"
@@ -115,30 +124,28 @@ def fetch_categories_for_bank(
             progress(banks_done, banks_total, f"[bank {bank_id}] ❌ {msg}")
         raise ValueError(msg)
 
-    driver = _driver()
+    driver = _get_driver()
+    
     try:
-        # try:
-        #     driver.maximize_window()
-        # except Exception:
-        #     driver.set_window_size(1920, 1080)
-
         note_start = f"[bank {bank_id}] Открываем {url}"
         print(note_start)
         if progress:
             progress(banks_done, banks_total, note_start)
 
         driver.get(url)
+        
+        # Очищаем кеш браузера периодически
+        if banks_done % 5 == 0:
+            driver.execute_script("window.localStorage.clear();")
+            driver.execute_script("window.sessionStorage.clear();")
 
-        # 1. Cookie
         _click_cookie(driver, cfg.get("cookie_text", ""))
 
-        # 2. Контейнер категорий
         container = WebDriverWait(driver, 10).until(
             EC.presence_of_element_located((By.CSS_SELECTOR, cfg["container_selector"]))
         )
         time.sleep(2)
 
-        # 3. Список категорий
         cat_elements = container.find_elements(By.CSS_SELECTOR, cfg["element_selector"])
         category_names = [
             el.text.strip().split("\n")[0].strip()
@@ -155,11 +162,9 @@ def fetch_categories_for_bank(
             )
 
         categories: List[Dict[str, Any]] = []
-
         el_tag, _ = (cfg["element_selector"].split(".", 1) + [None])[:2]
         print("Элемент категорий:", el_tag)
 
-        # 4. Цикл по именам категорий
         for idx, category_name in enumerate(category_names, start=1):
             cat_prefix = f"[bank {bank_id} cat {idx}/{len(category_names)} '{category_name}']"
 
@@ -184,7 +189,6 @@ def fetch_categories_for_bank(
                     progress(banks_done, banks_total, msg)
                 continue
 
-            # Клик по категории
             try:
                 driver.execute_script(
                     "arguments[0].scrollIntoView({block: 'center'});", label
@@ -195,22 +199,17 @@ def fetch_categories_for_bank(
                 except (ElementClickInterceptedException, StaleElementReferenceException):
                     driver.execute_script("arguments[0].click();", label)
             except Exception as e:
-                done += 1
-                tb = traceback.format_exc()
-                msg = f"[bank {bank_id}] ❌ Ошибка на уровне банка: {e}\n{tb}"
+                msg = f"[bank {bank_id}] ❌ Ошибка на уровне банка: {e}"
                 print(msg)
                 if progress:
-                    progress(done, total, msg)
+                    progress(banks_done, banks_total, msg)
                 continue
 
-            # ждём, пока изменится URL (если меняется)
             try:
                 WebDriverWait(driver, 10).until(lambda d: d.current_url != url)
             except TimeoutException:
-                warn = f"{cat_prefix} ⚠️ URL не изменился, возможно контент обновляется динамически"
+                warn = f"{cat_prefix} ⚠️ URL не изменился"
                 print(warn)
-                if progress:
-                    progress(banks_done, banks_total, warn)
 
             time.sleep(3)
             category_url = driver.current_url
@@ -223,7 +222,6 @@ def fetch_categories_for_bank(
             }
             categories.append(category)
 
-            # сохраняем категорию и получаем её id
             try:
                 category_id = save_single_category(category, bank_id)
             except Exception as e:
@@ -231,10 +229,8 @@ def fetch_categories_for_bank(
                 print(msg)
                 if progress:
                     progress(banks_done, banks_total, msg)
-                # даже если категория не сохранилась — идём дальше
                 continue
 
-            # парсим партнёров этой категории
             try:
                 partners = _parse_partners(
                     driver,
@@ -256,7 +252,6 @@ def fetch_categories_for_bank(
                 if progress:
                     progress(banks_done, banks_total, msg)
 
-            # сброс фильтра
             try:
                 label = WebDriverWait(driver, 10).until(
                     EC.element_to_be_clickable((By.XPATH, label_xpath))
@@ -270,18 +265,13 @@ def fetch_categories_for_bank(
                 if progress:
                     progress(banks_done, banks_total, f"{cat_prefix} ♻️ Фильтр сброшен")
             except TimeoutException:
-                warn = f"{cat_prefix} ⚠️ Не удалось сбросить фильтр — пробуем back()"
+                warn = f"{cat_prefix} ⚠️ Не удалось сбросить фильтр"
                 print(warn)
-                if progress:
-                    progress(banks_done, banks_total, warn)
                 driver.back()
             except Exception as e:
                 warn = f"{cat_prefix} ⚠️ Ошибка при сбросе фильтра: {e}"
                 print(warn)
-                if progress:
-                    progress(banks_done, banks_total, warn)
 
-            # ждём возврата контейнера категорий
             try:
                 WebDriverWait(driver, 10).until(
                     EC.presence_of_element_located(
@@ -292,14 +282,12 @@ def fetch_categories_for_bank(
             except TimeoutException:
                 warn = f"{cat_prefix} ⚠️ После сброса не появился контейнер категорий"
                 print(warn)
-                if progress:
-                    progress(banks_done, banks_total, warn)
 
         return categories
 
     finally:
-        driver.quit()
-
+        # Очищаем память но не закрываем драйвер (переиспользуем)
+        gc.collect()
 
 def _parse_partners(
     driver: webdriver.Chrome,
@@ -311,28 +299,18 @@ def _parse_partners(
     banks_total: int = 0,
     cat_prefix: str = "",
 ) -> List[Dict[str, Any]]:
-    """
-    Парсинг партнёров по категории.
-
-    ДОБАВЛЕНО:
-    - progress-логирование:
-      * старт раскрытия "Показать ещё"
-      * завершение раскрытия
-      * ошибки кликов по кнопке
-      * итоговое количество партнёров
-      * ошибки при сохранении в БД
-    """
+    """Парсинг партнёров по категории"""
+    
     pcfg = fetch_partners_scrape_config(bank_id)
 
     if cat_prefix == "":
         cat_prefix = f"[bank {bank_id} cat ?]"
 
-    # 1. Нажимаем "Показать ещё" до конца
     if progress:
         progress(
             banks_done,
             banks_total,
-            f"{cat_prefix} ▶️ Раскрываем список партнёров ('{pcfg['button_more']}')",
+            f"{cat_prefix} ▶️ Раскрываем список партнёров",
         )
 
     while True:
@@ -350,19 +328,14 @@ def _parse_partners(
                 driver.execute_script("arguments[0].click();", btn)
             time.sleep(2)
         except TimeoutException:
-            msg = f"{cat_prefix} ℹ️ Кнопка 'Показать ещё' больше не найдена — выходим из цикла"
+            msg = f"{cat_prefix} ℹ️ Кнопка 'Показать ещё' больше не найдена"
             print(msg)
-            if progress:
-                progress(banks_done, banks_total, msg)
             break
         except Exception as e:
-            msg = f"{cat_prefix} ❌ Ошибка при клике по 'Показать ещё': {e}"
+            msg = f"{cat_prefix} ❌ Ошибка при клике: {e}"
             print(msg)
-            if progress:
-                progress(banks_done, banks_total, msg)
             break
 
-    # 2. Парсим карточки партнёров
     cards = driver.find_elements(By.CSS_SELECTOR, pcfg["partners_list"])
     msg_found = f"{cat_prefix} 🔍 Найдено партнёров: {len(cards)}"
     print(msg_found)
@@ -372,35 +345,29 @@ def _parse_partners(
     result: List[Dict[str, Any]] = []
 
     for card in cards:
-        # name
         try:
             name_el = card.find_element(By.CSS_SELECTOR, pcfg["partner_name"])
             name_t = name_el.text.strip()
 
-            # если вдруг .text пустой — пробуем textContent
-            # тот самый баг
             if not name_t:
                 tc = (name_el.get_attribute("textContent") or "").strip()
                 if tc:
                     name_t = tc
 
             if "," in name_t:
-                original_name = name_t
                 name = name_t.split(",", 1)[0].strip()
                 rest = name_t.split(",", 1)[1].strip()
-                print(f"✂️ Название '{original_name}' обрезано до '{name}'")
             else:
                 name = name_t
                 rest = None
+                
             if not name:
-                print(f"⚠️ Пустое имя по селектору: {pcfg['partner_name']}")
                 name = "—"
         except Exception:
-            print(f"❌ Не удалось найти элемент имени по селектору: {pcfg['partner_name']}")
+            print(f"⚠️ Не удалось найти имя партнёра")
             name = "—"
             rest = None
 
-        # bonus
         bonus = None
         try:
             bonus_el = card.find_element(By.CSS_SELECTOR, pcfg["partner_bonus"])
@@ -410,112 +377,74 @@ def _parse_partners(
             if rest:
                 bonus = rest.replace(pcfg["bonus_unit"], "").strip() or None
 
-        # link
         try:
             href_raw = card.get_attribute("href") or ""
             link = urljoin(base_url, href_raw) if href_raw else ""
         except Exception:
             link = ""
 
-        result.append(
-            {
-                "partner_name": name,
-                "partner_bonus": bonus,
-                "partner_link": link,
-            }
-        )
+        result.append({
+            "partner_name": name,
+            "partner_bonus": bonus,
+            "partner_link": link,
+        })
 
-    # 3. Сохраняем партнёров
     try:
-        print("💾 Сохраняем партнёров через save_partners...")
+        print("💾 Сохраняем партнёров...")
         save_partners_with_status_logic(result, bank_id, category_id)
         msg_saved = f"{cat_prefix} ✅ Сохранено партнёров: {len(result)}"
         print(msg_saved)
         if progress:
             progress(banks_done, banks_total, msg_saved)
     except Exception as e:
-        msg = f"{cat_prefix} ❌ Ошибка при сохранении партнёров в БД: {e}"
+        msg = f"{cat_prefix} ❌ Ошибка при сохранении в БД: {e}"
         print(msg)
         if progress:
             progress(banks_done, banks_total, msg)
-        # не пробрасываем дальше — вернём то, что напарсили
+
     return result
 
-
 def update_all_banks_categories(progress: ProgressFn = None) -> None:
-
-
-    # opts = Options()
-    # opts.add_argument("--headless=new")
-    # opts.add_argument("--no-sandbox")
-    # opts.add_argument("--disable-dev-shm-usage")
-    # opts.add_argument("--window-size=1920,1080")
-
-    # driver = webdriver.Chrome(options=opts)
-    # driver.get("https://plushki.by/partners")
-    # print(driver.title)
-    # driver.quit()
-
-    """
-    Обходит все банки и запускает парсинг.
-    Если передан progress(done, total, note), будет вызывать его:
-    - по банкам (как раньше);
-    - ДОБАВЛЕНО: по категориям и по партнёрам внутри fetch_categories_for_bank/_parse_partners.
-    """
+    """Обходит все банки и запускает парсинг"""
+    
     bank_ids = get_all_bank_ids()
     total = len(bank_ids)
+    
     if total == 0:
         if progress:
             progress(1, 1, "В таблице banks нет записей")
         return
 
     done = 0
-    for bank_id in bank_ids:
-        if progress:
-            progress(done, total, f"[bank {bank_id}] ▶️ Старт парсинга банка")
-        try:
-            fetch_categories_for_bank(
-                bank_id,
-                progress=progress,
-                banks_done=done,
-                banks_total=total,
-            )
-            finalize_statuses_after_update()
-            done += 1
-            if progress:
-                progress(done, total, f"[bank {bank_id}] ✅ Готово по банку")
-        except Exception as e:
-            done += 1
-            msg = f"[bank {bank_id}] ❌ Ошибка на уровне банка: {e}"
-            print(msg)
-            if progress:
-                progress(done, total, msg)
-
-
-# def update_all_banks_categories(progress: ProgressFn = None) -> None:
-#     bank_ids = get_all_bank_ids()
-#     total = len(bank_ids)
-
-#     done = 0
-#     for bank_id in bank_ids:
-#         if progress:
-#             progress(done, total, f"[bank {bank_id}] ▶️ Старт парсинга банка")
-
-#         try:
-#             fetch_categories_for_bank(
-#                 bank_id,
-#                 progress=progress,
-#                 banks_done=done,
-#                 banks_total=total,
-#             )
-#             done += 1
-#             if progress:
-#                 progress(done, total, f"[bank {bank_id}] ✅ Готово по банку")
-#         except Exception as e:
-#             done += 1
-#             msg = f"[bank {bank_id}] ❌ Ошибка на уровне банка: {e}"
-#             print(msg)
-#             if progress:
-#                 progress(done, total, msg)
-
     
+    try:
+        for bank_id in bank_ids:
+            if progress:
+                progress(done, total, f"[bank {bank_id}] ▶️ Старт парсинга банка")
+            
+            try:
+                fetch_categories_for_bank(
+                    bank_id,
+                    progress=progress,
+                    banks_done=done,
+                    banks_total=total,
+                )
+                finalize_statuses_after_update()
+                done += 1
+                
+                if progress:
+                    progress(done, total, f"[bank {bank_id}] ✅ Готово по банку")
+                    
+            except Exception as e:
+                done += 1
+                msg = f"[bank {bank_id}] ❌ Ошибка на уровне банка: {e}"
+                print(msg)
+                import traceback
+                traceback.print_exc()
+                if progress:
+                    progress(done, total, msg)
+                    
+    finally:
+        # Очищаем драйвер в конце
+        _cleanup_driver()
+        gc.collect()

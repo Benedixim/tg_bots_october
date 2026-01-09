@@ -372,51 +372,47 @@ def callback_category(call):
         bot.send_message(call.message.chat.id, simple_reply)
 
 
-async def update_all_banks_with_status(progress_callback=None):
+def update_all_banks_with_status(progress_callback=None):
     """
-    Обёртка над существующим update_all_banks_categories с системой статусов
+    Обновление всех банков со статусами партнёров
+    СИНХРОННАЯ версия (без async)
     """
     try:
         ensure_status_columns()
         
-        # ШАГ 1: Подготовка статусов перед обновлением
+        # ШАГ 1: Подготовка статусов
         prepared = prepare_statuses_for_update()
-        print(f"✓ Подготовлено статусов: {prepared}")
+        print(f"✅ Подготовлено статусов: {prepared}")
         
         if progress_callback:
             progress_callback(0, 100, "Подготовка статусов...")
 
+        # ШАГ 2: Запускаем существующий update_all_banks_categories
+        # (синхронная функция из update_nw.py)
+        print("Запускаем update_all_banks_categories...")
+        from update_nw import update_all_banks_categories
+        update_all_banks_categories(progress_callback)
         
-        original_save_partners = db_sql.save_partners
+        # ШАГ 3: Финализируем статусы
+        finalized = finalize_statuses_after_update()
+        print(f"✅ Финализировано статусов: {finalized}")
         
-
-        db_sql.save_partners = db_sql.save_partners_with_status_logic
+        # ШАГ 4: Получаем отчёт
+        report = get_status_report()
         
-        try:
-            print("Запускаем существующий update_all_banks_categories...")
-            await update_all_banks_categories(progress_callback)
-            
-
-            finalized = finalize_statuses_after_update()
-            print(f"✓ Финализировано статусов: {finalized}")
-            
-            
-            report = get_status_report()
-            
-            print(f"\n✅ Обновление с системой статусов завершено!")
-            print(f"Статистика: {report['stats']}")
-            
-            return report
-            
-        finally:
-            db_sql.save_partners = original_save_partners
-            
+        print(f"\n✅ Обновление со статусами завершено!")
+        print(f"Статистика: {report['stats']}")
+        
+        return report
+        
     except Exception as e:
         print(f"❌ Ошибка в обновлении со статусами: {e}")
+        import traceback
+        traceback.print_exc()
         raise
 
 def run_update_with_status_wrapper(progress_callback=None):
-    return asyncio.run(update_all_banks_with_status(progress_callback))
+    return update_all_banks_with_status(progress_callback)
 
 
 @bot.message_handler(commands=['digest_with_status'])
@@ -657,21 +653,19 @@ _update_lock = threading.Lock()
 _update_running = False
 
 def _run_manual_update_with_progress(chat_id: int):
+    """Ручное обновление с прогрессом - ИСПРАВЛЕННАЯ ВЕРСИЯ"""
     global _update_running
     try:
-        # 1) Отправляем стартовое сообщение
-        msg = bot.send_message(chat_id, "🔄 Запускаю ручное обновление…")
+        msg = bot.send_message(chat_id, "📁 Запускаю ручное обновление…")
 
-        # 2) Локальная функция для обновления прогресса
         def tg_progress(done: int, total: int, note: str):
-            # защита от деления на ноль
             total = max(1, total)
             pct = int(done * 100 / total)
-            width = 20  # ширина «полосы»
+            width = 20
             filled = int(width * pct / 100)
-            bar = "▓" * filled + "░" * (width - filled)
+            bar = "█" * filled + "░" * (width - filled)
             text = (
-                f"🔄 Обновление категорий и партнёров\n"
+                f"📁 Обновление категорий и партнёров\n"
                 f"[{bar}] {pct}% ({done}/{total})\n"
                 f"{note}"
             )
@@ -682,16 +676,21 @@ def _run_manual_update_with_progress(chat_id: int):
                     text=text
                 )
             except Exception:
-                # редактирование может падать при частых апдейтах — игнорируем
                 pass
 
-        # 3) Запуск обновления с прогрессом
         tg_progress(0, 1, "Подготовка…")
-        run_update_with_status_wrapper(progress_callback=tg_progress)
+        try:
+            update_all_banks_with_status(progress_callback=tg_progress)
+        except Exception as e:
+            print(f"❌ Ошибка при обновлении: {e}")
+            import traceback
+            traceback.print_exc()
+            bot.send_message(chat_id, f"❌ Ошибка: {str(e)[:200]}")
+            return
 
-        # 4) Финальный штрих
         tg_progress(1, 1, "Готово ✅")
         bot.send_message(chat_id, "✅ Ручное обновление завершено.")
+        
     except Exception as e:
         bot.send_message(chat_id, f"❌ Ошибка при ручном обновлении: {e}")
     finally:
@@ -710,11 +709,11 @@ def update_command(message):
         return
 
     if _update_running:
-        bot.send_message(message.chat.id, "⏳ Обновление уже выполняется. Дождитесь завершения.")
+        bot.send_message(message.chat.id, "⏳ Обновление уже выполняется. Ждите завершения.")
         return
 
     if not _update_lock.acquire(blocking=False):
-        bot.send_message(message.chat.id, "⏳ Обновление уже выполняется. Дождитесь завершения.")
+        bot.send_message(message.chat.id, "⏳ Обновление уже выполняется. Ждите завершения.")
         return
 
     _update_running = True
