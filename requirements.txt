@@ -8,3 +8,5 @@ selenium
 dotenv
 bs4
 gigachat
+lxml
+requests

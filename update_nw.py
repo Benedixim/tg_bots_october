@@ -16,26 +16,25 @@ from selenium.common.exceptions import (
     StaleElementReferenceException,
 )
 
-from db_sql import (
+from back_db import (
     get_all_bank_ids,
     fetch_categories_scrape_config,
     fetch_partners_scrape_config,
     save_single_category,
-    save_partners_with_status_logic,
-    finalize_statuses_after_update,
+    save_partners
 )
 
 ProgressFn = Optional[Callable[[int, int, str], None]]
 
-from kaktus import fetch_cactus_partners
-from update_bnb import fetch_categories_simple_bank
+from сaсtus import fetch_cactus_partners
+from bnb import fetch_promotions_bnb
 from belkart import fetch_promotions
 
 PARSER_REGISTRY = {
     "default": None,
-    #"simple_js_categories": fetch_categories_simple_bank,
-    "belkart": fetch_promotions,
-    "cactus": fetch_cactus_partners,
+    "simple_js_categories": fetch_promotions_bnb,   # Банк 1 (БНБ)
+    "belkart": fetch_promotions,                    # Банк 2 (Белкарт)
+    "cactus": fetch_cactus_partners,                # Банк 13 (Кактус)
 }
 
 # Глобальный драйвер для переиспользования
@@ -72,10 +71,6 @@ def _cleanup_driver():
         pass
     gc.collect()
 
-def _driver() -> webdriver.Chrome:
-    """Для совместимости с kaktus.py"""
-    return _get_driver()
-
 def _click_cookie(driver: webdriver.Chrome, cookie_text: str) -> None:
     if not cookie_text:
         return
@@ -97,6 +92,7 @@ def fetch_categories_for_bank(
     """Router с поддержкой разных парсеров"""
     
     cfg = fetch_categories_scrape_config(bank_id)
+    print("DEBUG cfg:", bank_id, cfg.get("parser_type"))
     parser_type = cfg.get("parser_type", "default")
 
     if parser_type != "default":
@@ -127,8 +123,7 @@ def fetch_categories_for_bank(
     driver = _get_driver()
     
     try:
-        if bank_id != 1:
-            note_start = f"[bank {bank_id}] Открываем {url}"
+        note_start = f"[bank {bank_id}] Открываем {url}"
         print(note_start)
         if progress:
             progress(banks_done, banks_total, note_start)
@@ -392,7 +387,7 @@ def _parse_partners(
 
     try:
         print("💾 Сохраняем партнёров...")
-        save_partners_with_status_logic(result, bank_id, category_id)
+        save_partners(result, bank_id, category_id)
         msg_saved = f"{cat_prefix} ✅ Сохранено партнёров: {len(result)}"
         print(msg_saved)
         if progress:
@@ -430,7 +425,6 @@ def update_all_banks_categories(progress: ProgressFn = None) -> None:
                     banks_done=done,
                     banks_total=total,
                 )
-                finalize_statuses_after_update()
                 done += 1
                 
                 if progress:
@@ -446,6 +440,5 @@ def update_all_banks_categories(progress: ProgressFn = None) -> None:
                     progress(done, total, msg)
                     
     finally:
-        # Очищаем драйвер в конце
         _cleanup_driver()
         gc.collect()

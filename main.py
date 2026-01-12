@@ -1,5 +1,6 @@
 # main.py
 import os
+import re
 from dotenv import load_dotenv
 import time
 import threading
@@ -13,17 +14,18 @@ import asyncio
 from aiohttp import ClientSession
 from update_nw import fetch_categories_for_bank
 
-import db_sql
+import back_db
 import telebot
 from telebot import types
-from db_sql import (
+from back_db import DB_PATH
+from back_db import (
     get_banks,
-    fix_status_problems,
+    # fix_status_problems,
     get_latest_categories_by_bank,
     get_partners_latest_by_bank_category,
-    search_partners_latest,
     get_partner_counts_by_bank,
     search_partners,
+    search_partners_latest,
     get_bank_name,  
     backup_database,   # <— НОВОЕ
     remember_user, 
@@ -31,16 +33,17 @@ from db_sql import (
     get_today_partner_changes,
     ensure_tg_users_table,
     fetch_partners_scrape_config,
+    fetch_categories_scrape_config,
     get_categories,
     get_banks_name,
     get_test_digest_data,
-    ensure_status_columns,
-    prepare_statuses_for_update,
-    finalize_statuses_after_update,
-    get_status_report,
-    get_today_changes_with_status,
-    get_special_banks,
-    DB_PATH
+    debug_show_akv,
+    # ensure_status_columns,
+    # prepare_statuses_for_update,
+    # finalize_statuses_after_update,
+    # get_status_report,
+    # get_today_changes_with_status,
+    # get_special_banks,
 )
 
 from update_nw import update_all_banks_categories
@@ -146,11 +149,8 @@ def send_main_menu(bot, chat_id):
     btn3 = types.KeyboardButton("📊 Построить график")
     
     # Добавляем кнопки в клавиатуру
-    # Можно добавлять по одной или списком
     markup.add(btn1, btn2, btn3)
-    # Или построчно:
-    # markup.row(btn1)
-    # markup.row(btn2, btn3)
+
     
     # Отправляем сообщение с клавиатурой
     bot.send_message(
@@ -159,7 +159,6 @@ def send_main_menu(bot, chat_id):
         reply_markup=markup
     )
 
-#Add Buttons to All Users (/addbuttons <secret>) 
 
 @bot.message_handler(commands=['addbuttons'])
 def add_buttons_to_all_users(message):
@@ -216,30 +215,6 @@ def add_buttons_to_all_users(message):
     """
     bot.send_message(message.chat.id, report)
     
-from update_bnb import fetch_categories_simple_bank
-from belkart import fetch_promotions, save_belkart_items
-
-BANKS = [
-    {"id": 1, "name": "BNB", "func": fetch_categories_simple_bank},
-    {"id": 2, "name": "Belkart", "func": fetch_promotions},
-]
-
-@bot.message_handler(commands=['parse_banks'])
-def parse_banks_command(message):
-    bot.send_message(message.chat.id, "🚀 Запуск парсеров банков...")
-
-    # Последовательный запуск
-    for bank in BANKS:
-        bot.send_message(message.chat.id, f"🔹 Парсим банк {bank['name']} ({bank['id']})")
-        
-        if bank['name'] == "BNB":
-            bank['func'](bank_id=bank['id'])
-        elif bank['name'] == "Belkart":
-            items = bank['func'](bank_id=bank['id'])
-            save_belkart_items(bank['id'], items)
-
-    bot.send_message(message.chat.id, "✅ Парсинг завершён!")
-
 
 
 @bot.message_handler(commands=['start', 'menu'])
@@ -283,6 +258,33 @@ def callback_bank(call):
             disable_web_page_preview=True
         )
         return
+    
+    if bank_id == 1:
+        partners = get_partners_latest_by_bank_category(bank_id, 0)  
+
+        if not partners:
+            bot.send_message(call.message.chat.id, "У Белкарт нет партнёров.")
+            return
+
+        cfg = fetch_partners_scrape_config(bank_id)
+        bonus_unit = cfg.get("bonus_unit", "") or ""
+
+
+        lines = ["🏦 *БНБ — партнёры:*"]
+        for name, bonus, link in partners:
+            shown_link = link or "#"
+            bonus_display = f" — {bonus} {bonus_unit}".strip() if bonus else ""
+            lines.append(f"• [{name}]({shown_link}){bonus_display}")
+
+        reply = "\n".join(lines)
+        
+        bot.send_message(
+            call.message.chat.id,
+            reply,
+            parse_mode="Markdown",
+            disable_web_page_preview=True
+        )
+        return
 
     # Для остальных банков — показываем категории
     categories = get_latest_categories_by_bank(bank_id)
@@ -297,8 +299,14 @@ def callback_bank(call):
     bot.send_message(call.message.chat.id, "Выберите категорию:", reply_markup=markup)
 
 
-
-# Исправление в main.py - функция callback_category
+@bot.message_handler(commands=['check_parser_types'])
+def check_parser_types(message):
+    banks = get_banks()
+    response = "Parser Types:\n"
+    for bank_id, name, _ in banks:
+        cfg = fetch_categories_scrape_config(bank_id)
+        response += f"Bank {bank_id} ({name}): {cfg.get('parser_type', 'unknown')}\n"
+    bot.send_message(message.chat.id, response)
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('cat_'))
 def callback_category(call):
@@ -372,90 +380,14 @@ def callback_category(call):
         bot.send_message(call.message.chat.id, simple_reply)
 
 
-def update_all_banks_with_status(progress_callback=None):
-    """
-    Обновление всех банков со статусами партнёров
-    СИНХРОННАЯ версия (без async)
-    """
-    try:
-        ensure_status_columns()
-        
-        # ШАГ 1: Подготовка статусов
-        prepared = prepare_statuses_for_update()
-        print(f"✅ Подготовлено статусов: {prepared}")
-        
-        if progress_callback:
-            progress_callback(0, 100, "Подготовка статусов...")
 
-        # ШАГ 2: Запускаем существующий update_all_banks_categories
-        # (синхронная функция из update_nw.py)
-        print("Запускаем update_all_banks_categories...")
-        from update_nw import update_all_banks_categories
-        update_all_banks_categories(progress_callback)
-        
-        # ШАГ 3: Финализируем статусы
-        finalized = finalize_statuses_after_update()
-        print(f"✅ Финализировано статусов: {finalized}")
-        
-        # ШАГ 4: Получаем отчёт
-        report = get_status_report()
-        
-        print(f"\n✅ Обновление со статусами завершено!")
-        print(f"Статистика: {report['stats']}")
-        
-        return report
-        
-    except Exception as e:
-        print(f"❌ Ошибка в обновлении со статусами: {e}")
-        import traceback
-        traceback.print_exc()
-        raise
-
-def run_update_with_status_wrapper(progress_callback=None):
-    return update_all_banks_with_status(progress_callback)
 
 
 @bot.message_handler(commands=['digest_with_status'])
 def digest_with_status_command(message):
-    """
-    Дайджест с текущими статусами партнёров из БД
-    """
-    try:
-        from db_sql import get_today_changes_with_status
-        changes = get_today_changes_with_status()
-        
-        if not changes:
-            bot.send_message(message.chat.id, "ℹ️ Сегодняшних изменений нет")
-            return
-        
-        # Проверяем, есть ли статусы в данных
-        has_status = any('status' in change for change in changes)
-        
-        if not has_status:
-            bot.send_message(
-                message.chat.id,
-                "⚠️ Колонка 'status' не найдена в базе данных.\n"
-                "Для работы системы статусов выполните:\n"
-                "`/init_status qwerty11`\n\n"
-                "Показываю обычный дайджест без статусов..."
-            )
-        
-        # Формируем дайджест
-        text = format_changes_message(changes)
-        
-        # Показываем
-        header = "📋 ДАЙДЖЕСТ СО СТАТУСАМИ (сегодня):\n" if has_status else "📋 ОБЫЧНЫЙ ДАЙДЖЕСТ (сегодня):\n"
-        header += f"• Партнёров: {len(changes)}\n"
-        
-        if not has_status:
-            header += "• ⚠️ Статусы недоступны (требуется инициализация)\n"
-        
-        bot.send_message(message.chat.id, header)
-        
-        send_markdown_long(message.chat.id, text)
-        
-    except Exception as e:
-        bot.send_message(message.chat.id, f"❌ Ошибка: {str(e)}")
+    print(DB_PATH)
+    debug_show_akv()
+
 
 @bot.message_handler(commands=['check_db'])
 def check_db_command(message):
@@ -510,7 +442,7 @@ def init_status_command(message):
         bot.send_message(message.chat.id, "🔧 Инициализация системы статусов...")
         
         # Проверяем и создаем колонку
-        from db_sql import ensure_status_columns
+        from back_db import ensure_status_columns
         ensure_status_columns()
         
         # Проверяем структуру
@@ -580,51 +512,53 @@ def search_command(message):
     bot.register_next_step_handler(msg, perform_search)
 
 
+def escape_md(text: str) -> str:
+    return text.replace("*", "\\*").replace("_", "\\_").replace("[", "\\[").replace("]", "\\]")
+
+
 
 def perform_search(message):
     query = message.text.strip()
-    
-    print(f"DEBUG: perform_search query = '{query}'")  # Логируем входной запрос
-    
+
     if not query:
-        bot.send_message(message.chat.id, "Пустой запрос. Введите имя снова командой /search.")
+        bot.send_message(message.chat.id, "❌ Пустой запрос.")
         return
 
     results = search_partners(query)
-    
-    print(f"DEBUG: results = {results}")  # Логируем результаты
-    
+
     if not results:
-        bot.send_message(message.chat.id, f"❌ Ничего не найдено по запросу «{query}».")
+        bot.send_message(
+            message.chat.id,
+            f"❌ Ничего не найдено по запросу «{escape_md(query)}».",
+            parse_mode="Markdown"
+        )
         return
 
     from collections import defaultdict
     grouped = defaultdict(lambda: defaultdict(list))
-    
-    for bank_name, category_name, partner_name, bonus, bonus_unit, link in results:
-        grouped[bank_name][category_name].append({
-            "name": partner_name,
-            "bonus": bonus,
-            "bonus_unit": bonus_unit,
-            "link": link or "#",
-        })
 
-    lines = [f"🔎 Найдено совпадений: {len(results)}"]
-    
+    for bank, category, name, bonus, unit, link in results:
+        grouped[bank][category].append((name, bonus, unit, link))
+
+    lines = [f"🔎 Найдено: *{len(results)}*"]
+
     for bank, cats in grouped.items():
-        lines.append(f"\n🏦 *{bank}*")
-        for category, partners in cats.items():
-            lines.append(f"  → _{category}_")
-            for p in partners:
-                bonus_disp = f" — {p['bonus']} {p['bonus_unit']}".strip() if p['bonus'] else ""
-                lines.append(f"    [{p['name']}]({p['link']}) {bonus_disp}")
+        lines.append(f"\n🏦 *{escape_md(bank)}*")
+        for cat, partners in cats.items():
+            lines.append(f"  → _{escape_md(cat)}_")
+            for name, bonus, unit, link in partners:
+                bonus_text = f" — {bonus} {unit}" if bonus else ""
+                lines.append(
+                    f"    [{escape_md(name)}]({link}){escape_md(bonus_text)}"
+                )
 
     bot.send_message(
-        message.chat.id, 
-        "\n".join(lines), 
-        parse_mode="Markdown", 
+        message.chat.id,
+        "\n".join(lines),
+        parse_mode="Markdown",
         disable_web_page_preview=True
     )
+
 # ---------- Nightly Scheduler (01:00) ----------
 def _seconds_until_next_1am(now: dt.datetime | None = None) -> int:
     now = now or dt.datetime.now()
@@ -642,7 +576,7 @@ def nightly_scrape_loop():
         try:
             print(f"[{dt.datetime.now():%Y-%m-%d %H:%M:%S}] ▶️ Nightly categories update")
             _send_db_backup(1784338004)
-            run_update_with_status_wrapper()
+            update_all_banks_categories()
             print(f"[{dt.datetime.now():%Y-%m-%d %H:%M:%S}] ✅ Nightly update done")
         except Exception as e:
             print(f"[{dt.datetime.now():%Y-%m-%d %H:%M:%S}] ❌ Nightly update error: {e}")
@@ -653,19 +587,21 @@ _update_lock = threading.Lock()
 _update_running = False
 
 def _run_manual_update_with_progress(chat_id: int):
-    """Ручное обновление с прогрессом - ИСПРАВЛЕННАЯ ВЕРСИЯ"""
     global _update_running
     try:
-        msg = bot.send_message(chat_id, "📁 Запускаю ручное обновление…")
+        # 1) Отправляем стартовое сообщение
+        msg = bot.send_message(chat_id, "🔄 Запускаю ручное обновление…")
 
+        # 2) Локальная функция для обновления прогресса
         def tg_progress(done: int, total: int, note: str):
+            # защита от деления на ноль
             total = max(1, total)
             pct = int(done * 100 / total)
-            width = 20
+            width = 20  # ширина «полосы»
             filled = int(width * pct / 100)
-            bar = "█" * filled + "░" * (width - filled)
+            bar = "▓" * filled + "░" * (width - filled)
             text = (
-                f"📁 Обновление категорий и партнёров\n"
+                f"🔄 Обновление категорий и партнёров\n"
                 f"[{bar}] {pct}% ({done}/{total})\n"
                 f"{note}"
             )
@@ -676,21 +612,16 @@ def _run_manual_update_with_progress(chat_id: int):
                     text=text
                 )
             except Exception:
+                # редактирование может падать при частых апдейтах — игнорируем
                 pass
 
+        # 3) Запуск обновления с прогрессом
         tg_progress(0, 1, "Подготовка…")
-        try:
-            update_all_banks_with_status(progress_callback=tg_progress)
-        except Exception as e:
-            print(f"❌ Ошибка при обновлении: {e}")
-            import traceback
-            traceback.print_exc()
-            bot.send_message(chat_id, f"❌ Ошибка: {str(e)[:200]}")
-            return
+        update_all_banks_categories(progress=tg_progress)
 
+        # 4) Финальный штрих
         tg_progress(1, 1, "Готово ✅")
         bot.send_message(chat_id, "✅ Ручное обновление завершено.")
-        
     except Exception as e:
         bot.send_message(chat_id, f"❌ Ошибка при ручном обновлении: {e}")
     finally:
@@ -795,6 +726,7 @@ def format_changes_message(changes: list[dict]) -> str:
             total_updated += 1
             ch["change_type"] = "updated"
 
+
     total = total_new + total_updated + total_deleted
 
     lines: list[str] = []
@@ -862,40 +794,13 @@ def format_changes_message(changes: list[dict]) -> str:
 
 
 
-# Команда для бота
-@bot.message_handler(commands=['fix_status'])
-def fix_status_command(message):
-    """Исправляет проблемы со статусами в БД"""
-    parts = message.text.strip().split()
-    if len(parts) < 2 or parts[1] != 'qwerty11':
-        bot.send_message(message.chat.id, "⛔️ Неверный секрет")
-        return
-    
-    try:
-        bot.send_message(message.chat.id, "🔧 Исправляю проблемы со статусами...")
-        result = fix_status_problems()
-        
-        report = f"""
-        ✅ Исправление завершено:
-        
-        • Исправлено партнеров: {result['fixed_partners']}
-        • Удалено дубликатов: {result['deleted_duplicates']}
-        
-        Теперь партнеры со статусом 'delete' не будут создавать новых записей при повторном появлении.
-        """
-        
-        bot.send_message(message.chat.id, report)
-        
-    except Exception as e:
-        bot.send_message(message.chat.id, f"❌ Ошибка: {str(e)}")
-
 @bot.message_handler(commands=['db_digest'])
 def db_digest_command(message):
     """
     Статичный дайджест из реальных данных БД
     """
     try:
-        from db_sql import get_test_digest_data
+        from back_db import get_test_digest_data
         changes = get_test_digest_data()
         #changes = get_today_partner_changes()
         
@@ -987,7 +892,7 @@ def send_markdown_long(chat_id: int, text: str, chunk_size: int = 3500):
 
 def morning_digest_loop():
     # from db_sql import get_today_partner_changes  # если в отдельном модуле
-    from db_sql import get_today_changes_with_status
+    from back_db import get_today_partner_changes
     ensure_tg_users_table()  # на всякий случай
 
     while True:
@@ -998,8 +903,7 @@ def morning_digest_loop():
             now = dt.datetime.now()
             print(f"[{now:%Y-%m-%d %H:%M:%S}] ▶️ Morning digest start")
 
-            # changes = get_today_partner_changes()
-            changes = get_today_changes_with_status()
+            changes = get_today_partner_changes()
             if not changes:
                 print(f"[{now:%Y-%m-%d %H:%M:%S}] ℹ️ Morning digest: изменений нет")
                 continue
@@ -1024,8 +928,6 @@ def morning_digest_loop():
 
 # ----------------- ручной morning --------------------------- 
 
-# ---------- Ручной запуск утренней рассылки (/morning <secret>) ----------
-
 _morning_lock = threading.Lock()
 _morning_running = False
 
@@ -1040,7 +942,7 @@ def _run_manual_morning_digest(chat_id: int):
         msg = bot.send_message(chat_id, "📨 Формирую утренний дайджест…")
 
         # 1. Берём изменения за сегодня
-        changes = get_today_changes_with_status()
+        changes = get_today_partner_changes()
         
         if not changes:
             bot.edit_message_text(
@@ -1099,7 +1001,7 @@ def _run_manual_morning_digest_all(chat_id: int):
         msg = bot.send_message(chat_id, "📨 Формирую утренний дайджест для всех…")
 
         # 1. Берём изменения за сегодня
-        changes = get_today_changes_with_status()
+        changes = get_today_partner_changes()
 
         if not changes:
             bot.edit_message_text(
@@ -1196,7 +1098,7 @@ def _run_manual_morning_digest_all(chat_id: int):
         msg = bot.send_message(chat_id, "📨 Формирую утренний дайджест…")
 
         # 1. Берём изменения за сегодня
-        changes = get_today_changes_with_status()
+        changes = get_today_partner_changes()
 
         if not changes:
             bot.edit_message_text(

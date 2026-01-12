@@ -4,8 +4,7 @@ import sqlite3
 import datetime
 from typing import Any, Dict, List, Tuple, Optional
 
-DB_PATH = "new_db.db"
-
+DB_PATH = "banks_backup_20260111_022812.db"
 
 
 def _conn() -> sqlite3.Connection:
@@ -18,7 +17,6 @@ def _conn() -> sqlite3.Connection:
 def get_banks() -> List[Tuple[int, str, str]]:
     """[(id, name, loyalty_url), ...]"""
     conn = _conn()
-
     try:
         cur = conn.cursor()
         cur.execute("SELECT id, name, loyalty_url FROM banks ORDER BY name;")
@@ -33,7 +31,7 @@ def get_banks_name(bank_id: int) -> str:
         cur = conn.cursor()
         cur.execute("SELECT name FROM banks WHERE id=?;", (bank_id,))
         result = cur.fetchone() 
-        
+
         if result:
             return result[0] 
         return None
@@ -63,6 +61,7 @@ def get_all_bank_ids() -> List[int]:
         return [r[0] for r in cur.fetchall()]
     finally:
         conn.close()
+    conn.close()
 
 
 # ---------- SCRAPER CONFIG ----------
@@ -71,16 +70,9 @@ def fetch_categories_scrape_config(bank_id: int) -> Dict[str, Any]:
     try:
         cur = conn.cursor()
         cur.execute("""
-                SELECT
-                    loyalty_url,
-                    cookie,
-                    container,
-                    element,
-                    parser_type
-                FROM banks
-                WHERE id=?
-            """, (bank_id,))
-
+            SELECT loyalty_url, cookie, container, element, parser_type
+            FROM banks WHERE id=?
+        """, (bank_id,))
         row = cur.fetchone()
         if not row:
             raise ValueError(f"bank_id={bank_id} not found")
@@ -91,9 +83,9 @@ def fetch_categories_scrape_config(bank_id: int) -> Dict[str, Any]:
             "element_selector": row[3] or "",
             "parser_type": row[4] or "default",
         }
-
     finally:
         conn.close()
+
 
 
 def fetch_partners_scrape_config(bank_id: int) -> Dict[str, Any]:
@@ -119,20 +111,6 @@ def fetch_partners_scrape_config(bank_id: int) -> Dict[str, Any]:
 
 
 def get_today_partner_changes() -> list[dict]:
-    """
-    Возвращает список словарей:
-    {
-        bank_name,
-        category_name,
-        partner_name,
-        partner_bonus,
-        bonus_unit,  # <- ДОБАВИЛИ ЭТО
-        partner_link,
-        change_type: "new" | "updated",
-        checked_at: "YYYY-MM-DD HH:MM:SS"
-    }
-    Только те партнёры, у кого последняя запись за сегодняшний день.
-    """
     today = datetime.date.today()
     since = datetime.datetime.combine(today, datetime.time(0, 0, 0))
     since_str = since.strftime("%Y-%m-%d %H:%M:%S")
@@ -149,13 +127,7 @@ def get_today_partner_changes() -> list[dict]:
                     p.partner_bonus,
                     p.partner_link,
                     p.checked_at,
-                    (
-                        SELECT COUNT(*)
-                        FROM partners p2
-                        WHERE p2.bank_id = p.bank_id
-                          AND p2.category_id = p.category_id
-                          AND p2.partner_name = p.partner_name
-                    ) AS hist_count
+                    p.status
                 FROM partners p
                 WHERE p.checked_at = (
                     SELECT MAX(p2.checked_at)
@@ -170,10 +142,10 @@ def get_today_partner_changes() -> list[dict]:
                 c.name as category_name,
                 l.partner_name,
                 l.partner_bonus,
+                l.partner_link,
                 l.checked_at,
-                l.partner_link,  
-                l.hist_count,
-                b.bonus_unit  -- ДОБАВИЛИ ЭТО
+                l.status,
+                b.bonus_unit
             FROM latest l
             JOIN banks b ON b.id = l.bank_id
             JOIN categories c ON c.id = l.category_id
@@ -184,20 +156,29 @@ def get_today_partner_changes() -> list[dict]:
     finally:
         conn.close()
 
-    changes = []
-    for bank_name, category_name, partner_name, partner_bonus, checked_at, partner_link, hist_count, bonus_unit in rows:
-        change_type = "new" if hist_count == 1 else "updated"
-        changes.append({
+    result: list[dict] = []
+    for bank_name, category_name, partner_name, partner_bonus, partner_link, checked_at, status, bonus_unit in rows:
+        if status == "new":
+            change_type = "new"
+        elif status == "live":
+            change_type = "updated"
+        elif status in ("new_delete", "delete"):
+            change_type = "deleted"
+        else:
+            continue
+
+        result.append({
             "bank_name": bank_name,
             "category_name": category_name,
             "partner_name": partner_name,
             "partner_bonus": partner_bonus,
-            "bonus_unit": bonus_unit or "", 
-            "partner_link": partner_link or "#",  
-            "change_type": change_type,
+            "partner_link": partner_link,
+            "status": status,             
+            "change_type": change_type,    
             "checked_at": checked_at,
+            "bonus_unit": bonus_unit or "",
         })
-    return changes
+    return result
 
 
 # ---------- TABLE ENSURE ----------
@@ -222,30 +203,6 @@ def ensure_categories_table(conn: Optional[sqlite3.Connection] = None) -> None:
     if close:
         conn.close()
 
-def get_special_banks():
-    """
-    Возвращает только банки с кастомными парсерами, 
-    которые мы хотим обновлять через /up_bank.
-    """
-    # Задаём конкретные parser_type для нужных банков
-    SPECIAL_PARSERS = ('belkart', 'simple_js_categories')  # Белкарт и БНБ
-
-    with sqlite3.connect(DB_PATH) as conn:
-        cur = conn.cursor()
-        try:
-            cur.execute(f"""
-                SELECT DISTINCT bank_id
-                FROM categories_scrape_config
-                WHERE parser_type IN ({','.join('?' for _ in SPECIAL_PARSERS)})
-            """, SPECIAL_PARSERS)
-        except sqlite3.OperationalError as e:
-            raise RuntimeError(
-                f"❌ Таблица categories_scrape_config не найдена.\n"
-                f"Проверьте DB_PATH: {DB_PATH}"
-            ) from e
-
-        return [row[0] for row in cur.fetchall()]
-
 
 def ensure_partners_table(conn: Optional[sqlite3.Connection] = None) -> None:
     close = False
@@ -262,6 +219,7 @@ def ensure_partners_table(conn: Optional[sqlite3.Connection] = None) -> None:
             partner_bonus TEXT,
             partner_link TEXT,
             checked_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            status TEXT,
             FOREIGN KEY(bank_id) REFERENCES banks(id),
             FOREIGN KEY(category_id) REFERENCES categories(id)
         );
@@ -361,216 +319,183 @@ def get_latest_categories_by_bank(bank_id: int) -> List[Tuple[int, str, str]]:
 #         conn.commit()
 #     finally:
 #         conn.close()
-
-# to do func fith status
-def save_partners(
-    partners: List[Dict[str, Any]],
-    bank_id: int,
-    category_id: int
-):
-    ensure_status_columns()
-    prepare_statuses_partners_for_update(bank_id, category_id)
-
+def save_partners(partners: List[Dict[str, Any]], bank_id: int, category_id: int) -> None:
     conn = _conn()
     try:
+        ensure_partners_table(conn)
         cur = conn.cursor()
-        now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        checked_at = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-        # текущие статусы
         cur.execute("""
-            SELECT partner_name, status
-            FROM partners
-            WHERE id IN (
-                SELECT p.id
-                FROM partners p
-                JOIN (
-                    SELECT bank_id, category_id, partner_name, MAX(checked_at) m
-                    FROM partners
-                    WHERE bank_id=? AND category_id=?
-                    GROUP BY bank_id, category_id, partner_name
-                ) t
-                ON p.bank_id=t.bank_id
-                AND p.category_id=t.category_id
-                AND p.partner_name=t.partner_name
-                AND p.checked_at=t.m
-            )
+            UPDATE partners
+            SET status = 'ready'
+            WHERE bank_id = ? AND category_id = ?
+              AND status IN ('new', 'live')
         """, (bank_id, category_id))
-        current = dict(cur.fetchall())
 
-        parsed_names = set()
-
+        current_names: set[str] = set()
+        
         for p in partners:
-            name = p.get("partner_name")
-            if not name:
-                continue
 
-            parsed_names.add(name)
             bonus = p.get("partner_bonus")
-            link = p.get("partner_link") or ""
+            link = p.get("partner_link")
+            name = p["partner_name"]
+            current_names.add(name)
+            # 🚫 Пропускаем, если бонус пустой
+            #if not bonus or str(bonus).strip() == "":
+            #    continue
 
-            old_status = current.get(name)
+            # 🚫 Пропускаем, если ссылки нет или она пустая
+            #if not link or str(link).strip() == "":
+            #    continue
 
-            if old_status is None:
+            # link иногда = None → подстрахуемся
+            link = link.strip() if isinstance(link, str) else ""
+
+            # Проверяем последнюю запись
+            cur.execute("""
+                SELECT partner_bonus, partner_link
+                FROM partners
+                WHERE bank_id=? AND category_id=? AND partner_name=? 
+                        AND COALESCE(NULLIF(TRIM(partner_bonus),''),'') = COALESCE(NULLIF(TRIM(?),''),'')
+                        AND COALESCE(NULLIF(TRIM(partner_link),''),'') = COALESCE(NULLIF(TRIM(?),''),'')
+                ORDER BY checked_at DESC
+                LIMIT 1
+            """, (bank_id, category_id, name, bonus, link))
+
+            last = cur.fetchone()
+
+            # Изменилось? → сохраняем
+            if last is None:# or last[0] != bonus or last[1] != link:
                 status = "new"
-            elif old_status in ("ready", "new_delete"):
-                status = "live"
-            else:
-                status = old_status
+                cur.execute("""
+                    INSERT INTO partners (bank_id, category_id, partner_name, partner_bonus, partner_link, checked_at, status)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                """, (bank_id, category_id, name, bonus, link, checked_at, status))
 
-            cur.execute("""
-                INSERT INTO partners
-                (bank_id, category_id, partner_name, partner_bonus, partner_link, checked_at, status)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-            """, (bank_id, category_id, name, bonus, link, now, status))
 
-        # те, кто не пришёл
-        missing = set(current.keys()) - parsed_names
+        placeholders = ",".join("?" for _ in current_names)
+        base_params = [checked_at, bank_id, category_id, *current_names]
 
-        for name in missing:
-            prev = current[name]
-            status = "delete" if prev == "new_delete" else "new_delete"
+        # проверка на удаление партнера status -> new_delete
+        cur.execute(f"""
+            UPDATE partners
+            SET status = 'new_delete', checked_at = ?
+            WHERE bank_id = ? AND category_id = ?
+              AND partner_name NOT IN ({placeholders})
+              AND status = 'ready'
+        """, base_params)
 
-            cur.execute("""
-                INSERT INTO partners
-                (bank_id, category_id, partner_name, checked_at, status)
-                VALUES (?, ?, ?, ?, ?)
-            """, (bank_id, category_id, name, now, status))
+        # проверка - партнер точно ли удален партнер status -> delete
+        cur.execute(f"""
+            UPDATE partners
+            SET status = 'delete', checked_at = ?
+            WHERE bank_id = ? AND category_id = ?
+              AND status = 'new_delete'
+              AND partner_name NOT IN ({placeholders})
+        """, base_params)
+
+        cur.execute("""
+            UPDATE partners
+            SET status = 'live'
+            WHERE bank_id = ? AND category_id = ?
+              AND status = 'ready'
+        """, (bank_id, category_id))
 
         conn.commit()
     finally:
         conn.close()
 
-# def save_partners(partners: List[Dict[str, Any]], bank_id: int, category_id: int) -> None:
-#     conn = _conn()
-#     try:
-#         ensure_partners_table(conn)
-#         cur = conn.cursor()
-#         checked_at = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-#         for p in partners:
-#             bonus = p.get("partner_bonus")
-#             link = p.get("partner_link")
-#             # 🚫 Пропускаем, если бонус пустой
-#             #if not bonus or str(bonus).strip() == "":
-#             #    continue
-
-#             # 🚫 Пропускаем, если ссылки нет или она пустая
-#             #if not link or str(link).strip() == "":
-#             #    continue
-
-#             # link иногда = None → подстрахуемся
-#             link = link.strip()
-
-#             # Проверяем последнюю запись
-#             cur.execute("""
-#                 SELECT partner_bonus, partner_link
-#                 FROM partners
-#                 WHERE bank_id=? AND category_id=? AND partner_name=? 
-#                         AND COALESCE(NULLIF(TRIM(partner_bonus),''),'') = COALESCE(NULLIF(TRIM(?),''),'')
-#                         AND COALESCE(NULLIF(TRIM(partner_link),''),'') = COALESCE(NULLIF(TRIM(?),''),'')
-#                 ORDER BY checked_at DESC
-#                 LIMIT 1
-#             """, (bank_id, category_id, p["partner_name"], bonus, link))
-
-#             last = cur.fetchone()
-
-#             # Изменилось? → сохраняем
-#             if last is None:# or last[0] != bonus or last[1] != link:
-#                 cur.execute("""
-#                     INSERT INTO partners (bank_id, category_id, partner_name, partner_bonus, partner_link, checked_at)
-#                     VALUES (?, ?, ?, ?, ?, ?)
-#                 """, (bank_id, category_id, p["partner_name"], bonus, link, checked_at))
-
-#         conn.commit()
-#     finally:
-#         conn.close()
-
-
-# def get_partners_latest_by_bank_category(bank_id: int, category_id: int) -> List[Tuple[str, Optional[str], Optional[str]]]:
-#     conn = _conn()
-#     try:
-#         cur = conn.cursor()
-#         cur.execute("""
-#             SELECT partner_name, partner_bonus, partner_link
-#             FROM partners
-#             WHERE bank_id = ? AND category_id = ?
-#             AND checked_at = (SELECT MAX(checked_at) FROM partners p2 WHERE p2.bank_id=? AND p2.category_id=?)
-#             ORDER BY partner_name;
-#         """, (bank_id, category_id, bank_id, category_id))
-#         return cur.fetchall()
-#     finally:
-#         conn.close()
 
 def get_partners_latest_by_bank_category(bank_id: int, category_id: int) -> List[Tuple[str, Optional[str], Optional[str]]]:
-    """
-    Возвращает список (partner_name, partner_bonus, partner_link)
-    только последние версии, БЕЗ ДУБЛЕЙ по partner_name
-    """
     conn = _conn()
     try:
         cur = conn.cursor()
         cur.execute("""
             SELECT partner_name, partner_bonus, partner_link
-            FROM partners
+            FROM partners p
             WHERE bank_id = ? AND category_id = ?
             AND checked_at = (
                 SELECT MAX(p2.checked_at)
                 FROM partners p2
-                WHERE p2.bank_id = ? 
-                  AND p2.category_id = ?
-                  AND p2.partner_name = partners.partner_name
+                WHERE p2.bank_id = p.bank_id
+                    AND p2.category_id = p.category_id
+                    AND p2.partner_name = p.partner_name
             )
-            ORDER BY partner_name
-        """, (bank_id, category_id, bank_id, category_id))
-        
-        # Дополнительная дедубликация на уровне Python
-        seen = set()
-        result = []
-        for row in cur.fetchall():
-            partner_name = row[0]
-            if partner_name not in seen:
-                seen.add(partner_name)
-                result.append(row)
-        
-        return result
+            AND status IN ('new','live')
+            ORDER BY partner_name;
+        """, (bank_id, category_id))
+        return cur.fetchall()
     finally:
         conn.close()
 
-# def search_partners_latest(query: str) -> List[Tuple[str, str, str, Optional[str], Optional[str], Optional[str]]]:
-#     """
-#     Возвращает:
-#     (bank_name, category_name, partner_name, partner_bonus, bonus_unit, partner_link)
-#     только с последней версией по каждой паре (bank_id, category_id).
-#     """
-#     conn = _conn()
-#     try:
-#         cur = conn.cursor()
-#         cur.execute("""
-#             SELECT b.name as bank_name,
-#                    c.name as category_name,
-#                    p.partner_name,
-#                    p.partner_bonus,
-#                    b.bonus_unit,
-#                    p.partner_link
-#             FROM partners p
-#             JOIN banks b ON p.bank_id = b.id
-#             JOIN categories c ON p.category_id = c.id
-#             WHERE p.partner_name LIKE ?
-#             AND p.checked_at = (
-#                 SELECT MAX(p2.checked_at)
-#                 FROM partners p2
-#                 WHERE p2.bank_id = p.bank_id AND p2.category_id = p.category_id
-#             )
-#             ORDER BY b.name, c.name, p.partner_name;
-#         """, (f"%{query}%",))
-#         return cur.fetchall()
-#     finally:
-#         conn.close()
+def debug_show_akv():
+    conn = _conn()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT id, partner_name, status, checked_at
+        FROM partners
+        WHERE LOWER(partner_name) LIKE '%акв%'
+        ORDER BY partner_name
+        LIMIT 10;
+    """)
+    print("DEBUG LIKE akv:", cur.fetchall())
+    conn.close()
 
 
-def search_partners_latest(query: str) -> List[
-    Tuple[str, str, str, Optional[str], Optional[str], Optional[str]]
-]:
+def normalize(text: str) -> str:
+    return (
+        text.lower()
+        .replace("ё", "е")
+        .replace("«", "")
+        .replace("»", "")
+        .replace("-", "")
+        .replace(" ", "")
+        .replace(".", "")
+        .replace(",", "")
+        .strip()
+    )
+
+
+def search_partners(query: str):
+    conn = _conn()
+    try:
+        cur = conn.cursor()
+
+        q = normalize(query)
+        if not q:
+            return []
+
+        cur.execute("""
+            SELECT 
+                b.name,
+                COALESCE(c.name, 'Без категории'),
+                p.partner_name,
+                p.partner_bonus,
+                b.bonus_unit,
+                p.partner_link
+            FROM partners p
+            JOIN banks b ON b.id = p.bank_id
+            LEFT JOIN categories c ON c.id = p.category_id
+            WHERE p.status NOT IN ('delete', 'new_delete')
+        """)
+
+        results = []
+
+        for row in cur.fetchall():
+            partner_name = normalize(row[2])
+
+            if q in partner_name:
+                results.append(row)
+
+        return results
+
+    finally:
+        conn.close()
+
+
+
+def search_partners_latest(query: str) -> List[Tuple[str, str, str, Optional[str], Optional[str], Optional[str]]]:
     """
     Возвращает:
     (bank_name, category_name, partner_name, partner_bonus, bonus_unit, partner_link)
@@ -580,48 +505,100 @@ def search_partners_latest(query: str) -> List[
     try:
         cur = conn.cursor()
         cur.execute("""
-            SELECT b.name AS bank_name,
-                   c.name AS category_name,
-                   p.partner_name,
-                   p.partner_bonus,
-                   b.bonus_unit,
-                   p.partner_link
+            SELECT b.name as bank_name,
+                c.name as category_name,
+                p.partner_name,
+                p.partner_bonus,
+                b.bonus_unit,
+                p.partner_link
             FROM partners p
             JOIN banks b ON p.bank_id = b.id
             JOIN categories c ON p.category_id = c.id
-            WHERE LOWER(p.partner_name) LIKE ?
-              AND p.checked_at = (  
+            WHERE p.partner_name LIKE ?
+            AND p.checked_at = (
                 SELECT MAX(p2.checked_at)
                 FROM partners p2
                 WHERE p2.bank_id = p.bank_id
                     AND p2.category_id = p.category_id
                     AND p2.partner_name = p.partner_name
             )
+            AND p.status IN ('new','live')
             ORDER BY b.name, c.name, p.partner_name;
-        """, (f"%{query.lower()}%",))
+        """, (f"%{query}%",))
         return cur.fetchall()
     finally:
         conn.close()
 
 
-def get_partner_counts_by_bank(bank_id: int) -> List[Tuple[str, int]]:
-    """
-    [(category_name, partners_count), ...] — подсчёт партнёров по категориям для графика (DESC).
-    """
+# def get_partner_counts_by_bank(bank_id: int) -> List[tuple]:
+#     conn = _conn()
+#     try:
+#         cur = conn.cursor()
+#         cur.execute("""
+#             SELECT
+#                 CASE
+#                     WHEN c.name IS NULL OR c.name = '' THEN 'Все партнёры'
+#                     ELSE c.name
+#                 END AS category_name,
+#                 COUNT(*) AS cnt
+#             FROM partners p
+#             LEFT JOIN categories c ON c.id = p.category_id
+#             WHERE p.bank_id = ?
+#               AND p.status IN ('new','live')
+#             GROUP BY category_name
+#             ORDER BY cnt DESC;
+#         """, (bank_id,))
+#         return cur.fetchall()
+#     finally:
+#         conn.close()
+
+def get_partner_counts_by_bank(bank_id: int) -> List[tuple]:
     conn = _conn()
-    try:
-        cur = conn.cursor()
+    cur = conn.cursor()
+
+    if bank_id == 13:
+        # Кактус: считаем уникальных партнёров по имени
         cur.execute("""
-            SELECT c.name, COUNT(p.partner_name) AS partner_cnt
-            FROM categories c
-            LEFT JOIN partners p ON c.id = p.category_id AND p.bank_id = ?
-            WHERE c.bank_id = ?
+            SELECT c.name AS category_name,
+                   COUNT(DISTINCT p.partner_name) AS partners_unique
+            FROM partners p
+            JOIN categories c ON c.id = p.category_id
+            WHERE p.bank_id = 13
+              AND p.status IN ('new','live')
             GROUP BY c.name
-            ORDER BY partner_cnt DESC, c.name ASC;
-        """, (bank_id, bank_id))
-        return cur.fetchall()
-    finally:
-        conn.close()
+            ORDER BY partners_unique DESC;
+        """)
+        rows = cur.fetchall()
+        return [(row[0], row[1]) for row in rows]
+
+    elif bank_id in (1, 2):  # Белкарт и БНБ – без категорий
+        cur.execute("""
+            SELECT 'Все партнёры' AS category_name,
+                   COUNT(*) AS partners_count
+            FROM partners p
+            WHERE p.bank_id = ?
+              AND p.status IN ('new','live');
+        """, (bank_id,))
+        rows = cur.fetchall()
+        # либо вернётся [( 'Все партнёры', N )], либо []
+        return [(row[0], row[1]) for row in rows if row[1] > 0]
+
+    else:
+        # остальные банки с реальными категориями
+        cur.execute("""
+            SELECT c.name AS category_name,
+                   COUNT(*) AS partners_count
+            FROM partners p
+            JOIN categories c ON c.id = p.category_id
+            WHERE p.bank_id = ?
+              AND p.status IN ('new','live')
+            GROUP BY c.name
+            ORDER BY partners_count DESC;
+        """, (bank_id,))
+        rows = cur.fetchall()
+        return [(row[0], row[1]) for row in rows]
+
+
 
 def get_bank_name(bank_id: int) -> str:
     conn = _conn()
@@ -681,82 +658,6 @@ def backup_database(dest_dir: str = ".", filename: str | None = None) -> str:
     return out_path
 
 
-# #------------Update-------------------
-# def get_today_partner_changes() -> list[dict]:
-#     """
-#     Возвращает список словарей:
-#     {
-#         bank_name,
-#         category_name,
-#         partner_name,
-#         partner_bonus,
-#         change_type: "new" | "updated",
-#         checked_at: "YYYY-MM-DD HH:MM:SS"
-#     }
-#     Только те партнёры, у кого последняя запись за сегодняшний день.
-#     """
-#     today = datetime.date.today()
-#     since = datetime.datetime.combine(today, datetime.time(0, 0, 0))
-#     since_str = since.strftime("%Y-%m-%d %H:%M:%S")
-
-#     conn = _conn()
-#     try:
-#         cur = conn.cursor()
-#         cur.execute("""
-#             WITH latest AS (
-#                 SELECT
-#                     p.bank_id,
-#                     p.category_id,
-#                     p.partner_name,
-#                     p.partner_bonus,
-#                     p.partner_link,
-#                     p.checked_at,
-#                     (
-#                         SELECT COUNT(*)
-#                         FROM partners p2
-#                         WHERE p2.bank_id = p.bank_id
-#                           AND p2.category_id = p.category_id
-#                           AND p2.partner_name = p.partner_name
-#                     ) AS hist_count
-#                 FROM partners p
-#                 WHERE p.checked_at = (
-#                     SELECT MAX(p2.checked_at)
-#                     FROM partners p2
-#                     WHERE p2.bank_id = p.bank_id
-#                       AND p2.category_id = p.category_id
-#                       AND p2.partner_name = p.partner_name
-#                 )
-#             )
-#             SELECT
-#                 b.name as bank_name,
-#                 c.name as category_name,
-#                 l.partner_name,
-#                 l.partner_bonus,
-#                 l.checked_at,
-#                 l.hist_count
-#             FROM latest l
-#             JOIN banks b ON b.id = l.bank_id
-#             JOIN categories c ON c.id = l.category_id
-#             WHERE l.checked_at >= ?
-#             ORDER BY b.name, c.name, l.partner_name;
-#         """, (since_str,))
-#         rows = cur.fetchall()
-#     finally:
-#         conn.close()
-
-#     result = []
-#     for bank_name, category_name, partner_name, partner_bonus, checked_at, hist_count in rows:
-#         change_type = "new" if hist_count == 1 else "updated"
-#         result.append({
-#             "bank_name": bank_name,
-#             "category_name": category_name,
-#             "partner_name": partner_name,
-#             "partner_bonus": partner_bonus,
-#             "change_type": change_type,
-#             "checked_at": checked_at,
-#         })
-#     return result
-
 
 
 def get_test_digest_data():
@@ -804,451 +705,6 @@ def get_test_digest_data():
         
     finally:
         conn.close()
-
-
-# ---------- STATUS SYSTEM ----------
-def ensure_status_columns():
-    conn = _conn()
-    try:
-        cur = conn.cursor()
-        cur.execute("PRAGMA table_info(partners)")
-        cols = [c[1] for c in cur.fetchall()]
-
-        if "status" not in cols:
-            cur.execute("""
-                ALTER TABLE partners 
-                ADD COLUMN status TEXT DEFAULT 'live'
-            """)
-
-        cur.execute("""
-            CREATE INDEX IF NOT EXISTS idx_partners_latest
-            ON partners(bank_id, category_id, partner_name, checked_at)
-        """)
-
-        conn.commit()
-    finally:
-        conn.close()
-
-# def get_partners_current_status(conn, bank_id, category_id):
-#     cur = conn.cursor()
-
-#     cur.execute("""
-#         SELECT p.partner_name, p.status
-#         FROM partners p
-#         WHERE p.bank_id = ? AND p.category_id = ?
-#         AND p.checked_at = (
-#             SELECT MAX(p2.checked_at)
-#             FROM partners p2
-#             WHERE p2.bank_id = p.bank_id
-#             AND p2.category_id = p.category_id
-#             AND p2.partner_name = p.partner_name            )
-#     """, (bank_id, category_id))
-        
-#     return {row[0]: row[1] for row in cur.fetchall()}
-
-def get_partners_current_status(conn, bank_id, category_id):
-    """Получает текущие статусы партнёров для банка и категории"""
-    cur = conn.cursor()
-    
-    
-    if bank_id == 2:
-        category_id = 0
-    
-    cur.execute("""
-        SELECT DISTINCT p.partner_name, p.status
-        FROM partners p
-        INNER JOIN (
-            SELECT bank_id, category_id, partner_name, MAX(checked_at) as max_checked
-            FROM partners
-            WHERE bank_id = ? AND category_id = ?
-            GROUP BY bank_id, category_id, partner_name
-        ) latest ON p.bank_id = latest.bank_id 
-            AND p.category_id = latest.category_id 
-            AND p.partner_name = latest.partner_name 
-            AND p.checked_at = latest.max_checked
-    """, (bank_id, category_id))
-    
-    return {row[0]: row[1] for row in cur.fetchall()}
-
-def save_partners_with_status_logic(partners: List[Dict[str, Any]], bank_id: int, category_id: int) -> None:
-    """
-    Умное сохранение партнёров с логикой статусов
-    """
-   
-    if bank_id == 2:
-        category_id = 0
-        
-    conn = _conn()
-    try:
-        ensure_partners_table(conn)
-        cur = conn.cursor()
-        checked_at = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        
-       
-        normalized_partners = []
-        for p in partners:
-            partner_name = p.get("partner_name") or p.get("name") or p.get("company") or p.get("title")
-            if not partner_name:
-                continue 
-                
-            normalized_partners.append({
-                "partner_name": partner_name,
-                "partner_bonus": p.get("partner_bonus") or p.get("bonus") or p.get("cashback"),
-                "partner_link": p.get("partner_link") or p.get("link") or "",
-            })
-        
-
-        if not normalized_partners:
-            print(f"ℹ️ Нет партнёров для сохранения: bank_id={bank_id}, category_id={category_id}")
-            return
-        
-        
-        current_statuses = get_partners_current_status(conn, bank_id, category_id)
-        
-
-        new_partners = {p["partner_name"]: p for p in normalized_partners}
-        
-        print(f"🔍 Статистика: текущих партнёров={len(current_statuses)}, новых партнёров={len(new_partners)}")
-        
-       
-        updated_count = 0
-        new_count = 0
-        
-        for partner_name, partner_data in new_partners.items():
-            old_status = current_statuses.get(partner_name, 'none')
-            
-            
-            cur.execute("""
-                SELECT partner_bonus, partner_link, status
-                FROM partners
-                WHERE bank_id=? AND category_id=? AND partner_name=?
-                ORDER BY checked_at DESC
-                LIMIT 1
-            """, (bank_id, category_id, partner_name))
-
-            last = cur.fetchone()
-            
-
-            if old_status == 'none':
-                status = 'new'
-                new_count += 1
-            elif old_status in ['new_delete', 'delete']:
-                status = 'live'
-            
-            should_save = False
-            if not last:
-                should_save = True
-            else:
-                last_bonus, last_link, last_status = last
-                current_bonus = partner_data.get("partner_bonus") or ""
-                current_link = partner_data.get("partner_link") or ""
-                
-                if (last_bonus or "") != (current_bonus or "") or \
-                   (last_link or "") != (current_link or "") or \
-                   (last_status or "") != (status or ""):
-                    should_save = True
-            
-            if should_save:
-                cur.execute("""
-                    INSERT INTO partners 
-                    (bank_id, category_id, partner_name, partner_bonus, partner_link, checked_at, status)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
-                """, (
-                    bank_id, category_id,
-                    partner_name,
-                    partner_data.get("partner_bonus"),
-                    partner_data.get("partner_link") or "",
-                    checked_at,
-                    status
-                ))
-                
-                if old_status != status:
-                    cur.execute("""
-                        INSERT INTO status_log (partner_name, bank_id, category_id, old_status, new_status)
-                        VALUES (?, ?, ?, ?, ?)
-                    """, (partner_name, bank_id, category_id, old_status, status))
-                
-                updated_count += 1
-        
-
-        deleted_count = 0
-        for partner_name in set(current_statuses.keys()) - set(new_partners.keys()):
-            old_status = current_statuses[partner_name]
-            
-
-            if old_status in ['live', 'ready', 'new']:
-                status = 'new_delete'
-                
-                cur.execute("""
-                    INSERT INTO partners 
-                    (bank_id, category_id, partner_name, partner_bonus, partner_link, checked_at, status)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
-                """, (
-                    bank_id, category_id,
-                    partner_name,
-                    None,
-                    None,
-                    checked_at,
-                    status
-                ))
-                
-                cur.execute("""
-                    INSERT INTO status_log (partner_name, bank_id, category_id, old_status, new_status)
-                    VALUES (?, ?, ?, ?, ?)
-                """, (partner_name, bank_id, category_id, old_status, status))
-                
-                deleted_count += 1
-        
-        conn.commit()
-        
-    except Exception as e:
-        print(f"❌ Ошибка при сохранении партнёров: {e}")
-        import traceback
-        traceback.print_exc()
-    finally:
-        conn.close()
-
-
-def prepare_statuses_partners_for_update(bank_id: int, category_id: int):
-    conn = _conn()
-    try:
-        cur = conn.cursor()
-        cur.execute("""
-            UPDATE partners
-            SET status = 'ready'
-            WHERE id IN (
-                SELECT p.id
-                FROM partners p
-                JOIN (
-                    SELECT bank_id, category_id, partner_name, MAX(checked_at) m
-                    FROM partners
-                    WHERE bank_id=? AND category_id=?
-                    GROUP BY bank_id, category_id, partner_name
-                ) t
-                ON p.bank_id=t.bank_id
-                AND p.category_id=t.category_id
-                AND p.partner_name=t.partner_name
-                AND p.checked_at=t.m
-                AND p.status='live'
-            )
-        """, (bank_id, category_id))
-        conn.commit()
-    finally:
-        conn.close()
-
-
-def finalize_statuses_after_update():
-    conn = _conn()
-    try:
-        cur = conn.cursor()
-        cur.execute("""
-            UPDATE partners
-            SET status='live'
-            WHERE status='ready'
-            AND id IN (
-                SELECT id FROM (
-                    SELECT id,
-                    ROW_NUMBER() OVER (
-                        PARTITION BY bank_id, category_id, partner_name
-                        ORDER BY checked_at DESC
-                    ) rn
-                    FROM partners
-                ) WHERE rn=1
-            )
-        """)
-        conn.commit()
-    finally:
-        conn.close()
-
-def cleanup_deleted_partners():
-    """Удаляет партнёров со статусом 'delete'"""
-    conn = _conn()
-    try:
-        cur = conn.cursor()
-        cur.execute("""
-            DELETE FROM partners
-            WHERE id IN (
-                SELECT p.id
-                FROM partners p
-                INNER JOIN (
-                    SELECT bank_id, category_id, partner_name, MAX(checked_at) AS max_checked
-                    FROM partners
-                    GROUP BY bank_id, category_id, partner_name
-                ) latest
-                ON p.bank_id = latest.bank_id
-            AND p.category_id = latest.category_id
-            AND p.partner_name = latest.partner_name
-            AND p.checked_at = latest.max_checked
-            AND p.status = 'delete'
-                )
-        """)
-        deleted = cur.rowcount
-        conn.commit()
-        return deleted
-    finally:
-        conn.close()
-
-
-def get_live_partners(bank_id: int, category_id: int):
-    conn = _conn()
-    try:
-        cur = conn.cursor()
-        cur.execute("""
-            SELECT partner_name, partner_bonus, partner_link
-            FROM partners
-            WHERE status IN ('live', 'new')
-            AND id IN (
-                SELECT id FROM (
-                    SELECT id,
-                    ROW_NUMBER() OVER (
-                        PARTITION BY bank_id, category_id, partner_name
-                        ORDER BY checked_at DESC
-                    ) rn
-                    FROM partners
-                ) WHERE rn=1
-            )
-            AND bank_id=? AND category_id=?
-            ORDER BY partner_name
-        """, (bank_id, category_id))
-        return cur.fetchall()
-    finally:
-        conn.close()
-
-def get_status_report() -> Dict[str, Any]:
-    """Статистика по статусам"""
-    conn = _conn()
-    try:
-        cur = conn.cursor()
-        
-        # Статистика по статусам
-        cur.execute("""
-            SELECT status, COUNT(*) as count
-            FROM (
-                SELECT p.status
-                FROM partners p
-                INNER JOIN (
-                    SELECT bank_id, category_id, partner_name, MAX(checked_at) as max_checked
-                    FROM partners
-                    GROUP BY bank_id, category_id, partner_name
-                ) latest ON p.bank_id = latest.bank_id 
-                    AND p.category_id = latest.category_id 
-                    AND p.partner_name = latest.partner_name 
-                    AND p.checked_at = latest.max_checked
-            )
-            GROUP BY status
-        """)
-        
-        status_stats = {row[0]: row[1] for row in cur.fetchall()}
-        
-        # Последние изменения
-        cur.execute("""
-            SELECT 
-                partner_name,
-                bank_id,
-                category_id,
-                old_status,
-                new_status,
-                changed_at
-            FROM status_log
-            ORDER BY changed_at DESC
-            LIMIT 10
-        """)
-        
-        recent_changes = cur.fetchall()
-        
-        return {
-            "stats": status_stats,
-            "recent_changes": recent_changes
-        }
-        
-    finally:
-        conn.close()
-
-def get_today_changes_with_status() -> list[dict]:
-    """
-    Возвращает изменения за сегодня с учетом статусов.
-    Включает:
-    - 'new' — новые партнёры
-    - 'new_delete' — партнёры, которых больше нет (первый раз удалены)
-    - 'delete' — окончательно удалённые
-    Исключает 'live', 'ready' (без изменений)
-    """
-    today = datetime.date.today()
-    since = datetime.datetime.combine(today, datetime.time(0, 0, 0))
-    since_str = since.strftime("%Y-%m-%d %H:%M:%S")
-
-    conn = _conn()
-    try:
-        cur = conn.cursor()
-        
-        # Проверяем, есть ли колонка status
-        cur.execute("PRAGMA table_info(partners);")
-        columns = [col[1] for col in cur.fetchall()]
-        
-        if 'status' not in columns:
-            print("⚠️ Колонка status не найдена")
-            return []
-        
-        # Получаем партнёров со статусами 'new' и 'new_delete' за сегодня (только новых и удалённых)
-        cur.execute("""
-            SELECT
-                b.name as bank_name,
-                COALESCE(c.name, '—') as category_name,
-                p.partner_name,
-                p.partner_bonus,
-                p.partner_link,
-                p.status,
-                p.checked_at,
-                b.bonus_unit
-            FROM partners p
-            JOIN banks b ON p.bank_id = b.id
-            LEFT JOIN categories c ON p.category_id = c.id AND p.category_id != 0
-            WHERE p.checked_at >= ?
-            AND p.status IN ('new', 'new_delete')
-            ORDER BY p.checked_at DESC, b.name, p.partner_name
-        """, (since_str,))
-        
-        rows = cur.fetchall()
-        
-        result = []
-        seen = set()  # Для дедубликации
-        
-        for row in rows:
-            bank_name, category_name, partner_name, partner_bonus, partner_link, status, checked_at, bonus_unit = row
-            
-            # Дедубликация: берём только ПОСЛЕДНИЙ статус партнёра за день
-            key = (bank_name, category_name, partner_name)
-            if key in seen:
-                continue
-            seen.add(key)
-            
-            # Преобразуем status для фронта
-            if status == 'new':
-                change_type = 'new'
-            elif status == 'new_delete':
-                change_type = 'deleted'
-            elif status == 'delete':
-                change_type = 'deleted'
-            else:
-                change_type = 'updated'
-            
-            result.append({
-                "bank_name": bank_name,
-                "category_name": category_name or "—",
-                "partner_name": partner_name,
-                "partner_bonus": partner_bonus,
-                "partner_link": partner_link or "#",
-                "status": status,
-                "change_type": change_type,
-                "checked_at": checked_at,
-                "bonus_unit": bonus_unit or ""
-            })
-        
-        return result
-        
-    finally:
-        conn.close()
-
 
 # ---------- TELEGRAM USERS ----------
 
