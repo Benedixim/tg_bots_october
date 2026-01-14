@@ -1,8 +1,11 @@
+#cactus
 import time
 import re
 from typing import List, Dict, Any, Optional, Tuple
 
 from selenium.webdriver.common.by import By
+from selenium.common.exceptions import TimeoutException, WebDriverException
+import urllib3
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException, NoSuchElementException
@@ -30,8 +33,28 @@ def fetch_cactus_partners(
         if progress:
             progress(banks_done, banks_total, note)
 
-        # 1. Главная страница
-        driver.get(BASE_URL)
+        try:
+            driver.set_page_load_timeout(30)  # или 40–60, как комфортно
+            driver.get(BASE_URL)
+        except TimeoutException as e:
+            msg = f"[bank {bank_id}] ⏱️ Таймаут при загрузке {BASE_URL}: {e}"
+            print(msg)
+            if progress:
+                progress(banks_done, banks_total, msg)
+            return []  # Не роняем весь цикл, а просто скипаем Кактус
+        except WebDriverException as e:
+            msg = f"[bank {bank_id}] ❌ WebDriver ошибка при загрузке {BASE_URL}: {e}"
+            print(msg)
+            if progress:
+                progress(banks_done, banks_total, msg)
+            return []
+        except (urllib3.exceptions.ReadTimeoutError, TimeoutError) as e:
+            msg = f"[bank {bank_id}] ⏱️ Сетевой таймаут при загрузке {BASE_URL}: {e}"
+            print(msg)
+            if progress:
+                progress(banks_done, banks_total, msg)
+            return []
+
         time.sleep(3)
         _click_cookie(driver, "Согласен")
 

@@ -18,16 +18,16 @@ import back_db
 import telebot
 from telebot import types
 from back_db import DB_PATH
+from сaсtus import fetch_cactus_partners
+from belkart import fetch_promotions
 from back_db import (
     get_banks,
-    # fix_status_problems,
     get_latest_categories_by_bank,
     get_partners_latest_by_bank_category,
     get_partner_counts_by_bank,
     search_partners,
-    search_partners_latest,
     get_bank_name,  
-    backup_database,   # <— НОВОЕ
+    backup_database,   
     remember_user, 
     get_all_chat_ids, 
     get_today_partner_changes,
@@ -36,14 +36,7 @@ from back_db import (
     fetch_categories_scrape_config,
     get_categories,
     get_banks_name,
-    get_test_digest_data,
     debug_show_akv,
-    # ensure_status_columns,
-    # prepare_statuses_for_update,
-    # finalize_statuses_after_update,
-    # get_status_report,
-    # get_today_changes_with_status,
-    # get_special_banks,
 )
 
 from update_nw import update_all_banks_categories
@@ -387,6 +380,25 @@ def callback_category(call):
 def digest_with_status_command(message):
     print(DB_PATH)
     debug_show_akv()
+
+
+BANKS = [
+    {"id": 13, "name": "cactus", "func": fetch_cactus_partners}
+]
+
+@bot.message_handler(commands=['parse_banks'])
+def parse_banks_command(message):
+    bot.send_message(message.chat.id, "🚀 Запуск парсеров банков...")
+
+    for bank in BANKS:
+        bot.send_message(message.chat.id, f"🔹 Парсим банк {bank['name']} ({bank['id']})")
+
+        if bank['name'] == "cactus":
+            bank['func'](bank_id=bank['id'])
+        else:
+            print("НЕ УДАЛОСЬ")
+
+    bot.send_message(message.chat.id, "✅ Парсинг завершён!")
 
 
 @bot.message_handler(commands=['check_db'])

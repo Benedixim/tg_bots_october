@@ -4,7 +4,7 @@ import sqlite3
 import datetime
 from typing import Any, Dict, List, Tuple, Optional
 
-DB_PATH = "banks_backup_20260111_022812.db"
+DB_PATH = "banks_backup_20260112_085814.db"
 
 
 def _conn() -> sqlite3.Connection:
@@ -61,7 +61,7 @@ def get_all_bank_ids() -> List[int]:
         return [r[0] for r in cur.fetchall()]
     finally:
         conn.close()
-    conn.close()
+
 
 
 # ---------- SCRAPER CONFIG ----------
@@ -294,31 +294,6 @@ def get_latest_categories_by_bank(bank_id: int) -> List[Tuple[int, str, str]]:
 
 
 # ---------- PARTNERS ----------
-# def save_partners(partners: List[Dict[str, Any]], bank_id: int, category_id: int) -> None:
-#     conn = _conn()
-#     try:
-#         ensure_partners_table(conn)
-#         cur = conn.cursor()
-#         checked_at = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-#         for p in partners:
-#             cur.execute("""
-#                 SELECT partner_bonus, partner_link
-#                 FROM partners
-#                 WHERE bank_id=? AND category_id=? AND partner_name=? AND partner_bonus=?
-#                 ORDER BY checked_at DESC
-#                 LIMIT 1
-#             """, (bank_id, category_id, p["partner_name"], p.get("partner_bonus")))
-#             last = cur.fetchone()
-#             bonus = p.get("partner_bonus")
-#             link = p.get("partner_link") or ""
-#             if last is None or last[0] != bonus or last[1] != link:
-#                 cur.execute("""
-#                     INSERT INTO partners (bank_id, category_id, partner_name, partner_bonus, partner_link, checked_at)
-#                     VALUES (?, ?, ?, ?, ?, ?)
-#                 """, (bank_id, category_id, p["partner_name"], bonus, link, checked_at))
-#         conn.commit()
-#     finally:
-#         conn.close()
 def save_partners(partners: List[Dict[str, Any]], bank_id: int, category_id: int) -> None:
     conn = _conn()
     try:
@@ -530,34 +505,12 @@ def search_partners_latest(query: str) -> List[Tuple[str, str, str, Optional[str
         conn.close()
 
 
-# def get_partner_counts_by_bank(bank_id: int) -> List[tuple]:
-#     conn = _conn()
-#     try:
-#         cur = conn.cursor()
-#         cur.execute("""
-#             SELECT
-#                 CASE
-#                     WHEN c.name IS NULL OR c.name = '' THEN 'Все партнёры'
-#                     ELSE c.name
-#                 END AS category_name,
-#                 COUNT(*) AS cnt
-#             FROM partners p
-#             LEFT JOIN categories c ON c.id = p.category_id
-#             WHERE p.bank_id = ?
-#               AND p.status IN ('new','live')
-#             GROUP BY category_name
-#             ORDER BY cnt DESC;
-#         """, (bank_id,))
-#         return cur.fetchall()
-#     finally:
-#         conn.close()
-
-def get_partner_counts_by_bank(bank_id: int) -> List[tuple]:
+def get_partner_counts_by_bank(bank_id: int) -> list[tuple]:
     conn = _conn()
     cur = conn.cursor()
 
     if bank_id == 13:
-        # Кактус: считаем уникальных партнёров по имени
+        # Кактус: уникальные партнёры по имени
         cur.execute("""
             SELECT c.name AS category_name,
                    COUNT(DISTINCT p.partner_name) AS partners_unique
@@ -574,20 +527,19 @@ def get_partner_counts_by_bank(bank_id: int) -> List[tuple]:
     elif bank_id in (1, 2):  # Белкарт и БНБ – без категорий
         cur.execute("""
             SELECT 'Все партнёры' AS category_name,
-                   COUNT(*) AS partners_count
+                   COUNT(DISTINCT p.partner_name) AS partners_count
             FROM partners p
             WHERE p.bank_id = ?
               AND p.status IN ('new','live');
         """, (bank_id,))
         rows = cur.fetchall()
-        # либо вернётся [( 'Все партнёры', N )], либо []
         return [(row[0], row[1]) for row in rows if row[1] > 0]
 
     else:
         # остальные банки с реальными категориями
         cur.execute("""
             SELECT c.name AS category_name,
-                   COUNT(*) AS partners_count
+                   COUNT(DISTINCT p.partner_name) AS partners_count
             FROM partners p
             JOIN categories c ON c.id = p.category_id
             WHERE p.bank_id = ?
