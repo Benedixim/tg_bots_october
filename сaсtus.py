@@ -1,19 +1,61 @@
 #cactus
 import time
 import re
+import gc
 from typing import List, Dict, Any, Optional, Tuple
-
+from selenium import webdriver
 from selenium.webdriver.common.by import By
-from selenium.common.exceptions import TimeoutException, WebDriverException
-import urllib3
+from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import TimeoutException, NoSuchElementException
+from selenium.common.exceptions import (
+    TimeoutException, 
+    WebDriverException, 
+    NoSuchElementException
+)
+import urllib3
 
 from back_db import save_single_category, save_partners
 
 BASE_URL = "https://www.mtbank.by/cards/cactus/part/"
 
+def _create_cactus_driver() -> webdriver.Chrome:
+    """Создает новый драйвер специально для Кактуса"""
+    opts = Options()
+    opts.add_argument("--headless=new")
+    opts.add_argument("--no-sandbox")
+    opts.add_argument("--disable-dev-shm-usage")
+    opts.add_argument("--window-size=1920,1080")
+    opts.add_argument("--disable-gpu")
+    opts.add_argument("--disable-extensions")
+    opts.add_argument("--disable-plugins")
+    opts.add_argument("--memory-pressure-off")
+    
+    driver = webdriver.Chrome(options=opts)
+    driver.set_page_load_timeout(30)
+    return driver
+
+def _cleanup_cactus_driver(driver: webdriver.Chrome):
+    """Очищает драйвер Кактуса"""
+    try:
+        if driver:
+            driver.quit()
+    except:
+        pass
+    gc.collect()
+
+def _click_cookie(driver: webdriver.Chrome, cookie_text: str) -> None:
+    """Закрывает cookie окно"""
+    if not cookie_text:
+        return
+    try:
+        btn = WebDriverWait(driver, 5).until(
+            EC.element_to_be_clickable((By.XPATH, f"//button[contains(., '{cookie_text}')]"))
+        )
+        driver.execute_script("arguments[0].click();", btn)
+        print("✅ Cookie окно закрыто")
+    except TimeoutException:
+        print("⚠️ Окно cookie не появилось – продолжаем")
 
 def fetch_cactus_partners(
     bank_id: int,
@@ -21,35 +63,32 @@ def fetch_cactus_partners(
     banks_done: int = 0,
     banks_total: int = 0,
 ) -> List[Dict[str, Any]]:
-    from update_nw import _get_driver, _click_cookie
+    """ОСНОВНАЯ ФУНКЦИЯ - создает свой драйвер и закрывает его в конце"""
+    
 
-    driver = _get_driver()
-    print("✅ Драйвер успешно инициализирован")
+    driver = None
     categories_data: List[Dict[str, Any]] = []
 
     try:
+        driver = _create_cactus_driver()
+        print("✅ Драйвер Кактуса успешно инициализирован")
+
         note = f"[bank {bank_id}] 🌵 Кактус - запуск парсера"
         print(note)
         if progress:
             progress(banks_done, banks_total, note)
 
+        # Загрузка страницы
         try:
-            driver.set_page_load_timeout(30)  # или 40–60, как комфортно
             driver.get(BASE_URL)
         except TimeoutException as e:
-            msg = f"[bank {bank_id}] ⏱️ Таймаут при загрузке {BASE_URL}: {e}"
-            print(msg)
-            if progress:
-                progress(banks_done, banks_total, msg)
-            return []  # Не роняем весь цикл, а просто скипаем Кактус
-        except WebDriverException as e:
-            msg = f"[bank {bank_id}] ❌ WebDriver ошибка при загрузке {BASE_URL}: {e}"
+            msg = f"[bank {bank_id}] Таймаут при загрузке {BASE_URL}: {e}"
             print(msg)
             if progress:
                 progress(banks_done, banks_total, msg)
             return []
-        except (urllib3.exceptions.ReadTimeoutError, TimeoutError) as e:
-            msg = f"[bank {bank_id}] ⏱️ Сетевой таймаут при загрузке {BASE_URL}: {e}"
+        except (WebDriverException, urllib3.exceptions.ReadTimeoutError, TimeoutError) as e:
+            msg = f"[bank {bank_id}] ❌ Ошибка при загрузке {BASE_URL}: {e}"
             print(msg)
             if progress:
                 progress(banks_done, banks_total, msg)
@@ -58,7 +97,7 @@ def fetch_cactus_partners(
         time.sleep(3)
         _click_cookie(driver, "Согласен")
 
-        # 2. Категории
+        # Парсинг категорий и обработка
         categories = _parse_categories(driver)
         print(f"[bank {bank_id}] 📂 Найдено категорий: {len(categories)}")
 
@@ -69,7 +108,7 @@ def fetch_cactus_partners(
                 progress(banks_done, banks_total, note)
             return []
 
-        # 3. Обработка категорий
+        # Обработка категорий
         for idx, (category_name, category_value) in enumerate(categories, 1):
             cat_note = f"[bank {bank_id}] 📋 Категория {idx}/{len(categories)}: {category_name}"
             print(cat_note)
@@ -101,6 +140,11 @@ def fetch_cactus_partners(
         traceback.print_exc()
         return []
 
+    finally:
+        print(f"[bank {bank_id}] Закрываем драйвер Кактуса")
+        _cleanup_cactus_driver(driver)
+
+
 
 def _parse_categories(driver) -> List[Tuple[str, str]]:
     categories: List[Tuple[str, str]] = []
@@ -113,7 +157,7 @@ def _parse_categories(driver) -> List[Tuple[str, str]]:
         checkbox_wraps = driver.find_elements(
             By.CSS_SELECTOR, ".checkboxs.js-bind-checkboxes .checkbox-wrap"
         )
-        print(f"🔍 Найдено чекбоксов: {len(checkbox_wraps)}")
+        print(f"Найдено чекбоксов: {len(checkbox_wraps)}")
 
         for wrap in checkbox_wraps:
             try:
@@ -129,12 +173,12 @@ def _parse_categories(driver) -> List[Tuple[str, str]]:
                     categories.append((category_name, category_value))
                     print(f"  ✅ {category_name} (value={category_value})")
             except Exception as e:
-                print(f"  ⚠️ Ошибка парсинга категории: {e}")
+                print(f"Ошибка парсинга категории: {e}")
 
         print(f"✅ Успешно загружено {len(categories)} категорий")
 
     except TimeoutException:
-        print("⚠️ Таймаут при загрузке категорий")
+        print("Таймаут при загрузке категорий")
     except Exception as e:
         print(f"❌ Ошибка парсинга категорий: {e}")
         import traceback

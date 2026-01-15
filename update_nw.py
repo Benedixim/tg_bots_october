@@ -90,12 +90,16 @@ def fetch_categories_for_bank(
     banks_total: int = 0,
 ) -> List[Dict[str, Any]]:
     """Router с поддержкой разных парсеров"""
-    
+
+
     cfg = fetch_categories_scrape_config(bank_id)
     print("DEBUG cfg:", bank_id, cfg.get("parser_type"))
     parser_type = cfg.get("parser_type", "default")
 
+
+
     if parser_type != "default":
+        _cleanup_driver() 
         parser = PARSER_REGISTRY.get(parser_type)
         if not parser:
             raise ValueError(f"Неизвестный parser_type: {parser_type}")
@@ -282,7 +286,6 @@ def fetch_categories_for_bank(
         return categories
 
     finally:
-        # Очищаем память но не закрываем драйвер (переиспользуем)
         gc.collect()
 
 def _parse_partners(
