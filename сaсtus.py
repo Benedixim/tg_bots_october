@@ -220,11 +220,11 @@ def _process_category(
     try:
         all_partners: List[Dict[str, Any]] = []
 
-        # 1. Текущая страница (та, куда загрузился фильтр)
-        print("  📄 Страница (текущая после фильтра)")
+        # 1. Текущая страница (уже загружена)
+        print("Страница (текущая после фильтра)")
         all_partners.extend(_parse_page_partners(driver))
 
-        # 2. Собираем все ссылки пагинации и обходим их
+        # 2. Собираем и обходим страницы пагинации
         page_links = driver.find_elements(
             By.CSS_SELECTOR, ".pagination__list a.pagination__page"
         )
@@ -234,14 +234,29 @@ def _process_category(
             if href:
                 page_urls.append(href)
 
-        # уникализация с сохранением порядка
-        page_urls = list(dict.fromkeys(page_urls))
+        page_urls = list(dict.fromkeys(page_urls))  # уникализация
 
         for url in page_urls:
-            print(f"  📄 Доп. страница: {url}")
-            driver.get(url)
-            time.sleep(2)
-            all_partners.extend(_parse_page_partners(driver))
+            print(f"Доп. страница: {url}")
+            try:
+                driver.set_page_load_timeout(25)  # таймаут на каждую страницу
+                driver.get(url)
+                time.sleep(2)
+                all_partners.extend(_parse_page_partners(driver))
+                print(f"Страница загружена: +{len(_parse_page_partners(driver))} партнёров")
+            except TimeoutException as e:
+                msg = f"Таймаут на странице {url}: {e}"
+                print(msg)
+                continue  # пропускаем страницу, но идём дальше
+            except WebDriverException as e:
+                msg = f"WebDriver ошибка на странице {url}: {e}"
+                print(msg)
+                continue
+            except Exception as e:
+                msg = f"Неожиданная ошибка на странице {url}: {e}"
+                print(msg)
+                continue
+
 
         if all_partners:
             save_partners(all_partners, bank_id, category_id)
