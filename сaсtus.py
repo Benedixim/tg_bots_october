@@ -230,17 +230,10 @@ def _process_category(
         
         while page_num <= max_pages:
             try:
-                # Ищем ссылку на следующую страницу
-                next_page_link = _find_next_page_link(driver, page_num)
-                
-                if not next_page_link:
+                # Кликаем по ссылке страницы (AJAX загрузка)
+                if not _click_pagination_page(driver, page_num):
                     print(f"Нет ссылки на страницу {page_num}, заканчиваем пагинацию")
                     break
-
-                print(f"Переходим на страницу {page_num}...")
-                driver.set_page_load_timeout(25)
-                driver.get(next_page_link)
-                time.sleep(2)
                 
                 page_partners = _parse_page_partners(driver)
                 if not page_partners:
@@ -283,8 +276,8 @@ def _process_category(
         return None
 
 
-def _find_next_page_link(driver, page_num: int) -> Optional[str]:
-    """Находит URL следующей страницы по номеру"""
+def _click_pagination_page(driver, page_num: int) -> bool:
+    """Кликает по ссылке страницы пагинации вместо перехода по URL"""
     try:
         # Ищем все ссылки пагинации
         pagination_links = driver.find_elements(
@@ -295,16 +288,28 @@ def _find_next_page_link(driver, page_num: int) -> Optional[str]:
             try:
                 link_text = link.text.strip()
                 if link_text == str(page_num):
-                    href = link.get_attribute("href")
-                    if href:
-                        return href
+                    # Скроллим к ссылке и кликаем
+                    driver.execute_script("arguments[0].scrollIntoView({block:'center'});", link)
+                    time.sleep(0.5)
+                    driver.execute_script("arguments[0].click();", link)
+                    print(f"✅ Клик по странице {page_num}")
+                    # Ждём загрузки контента через AJAX
+                    WebDriverWait(driver, 15).until(
+                        EC.presence_of_all_elements_located((By.CSS_SELECTOR, ".about-banners__item"))
+                    )
+                    time.sleep(2)
+                    return True
             except StaleElementReferenceException:
                 continue
         
-        return None
+        print(f"❌ Ссылка на страницу {page_num} не найдена")
+        return False
+    except TimeoutException:
+        print(f"⚠️ Таймаут при загрузке страницы {page_num} через AJAX")
+        return False
     except Exception as e:
-        print(f"Ошибка поиска ссылки пагинации: {e}")
-        return None
+        print(f"⚠️ Ошибка клика по пагинации: {e}")
+        return False
 
 
 def _apply_category_filter(driver, category_value: str) -> bool:
