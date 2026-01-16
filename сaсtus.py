@@ -19,7 +19,7 @@ from back_db import save_single_category, save_partners
 
 BASE_URL = "https://www.mtbank.by/cards/cactus/part/"
 
-def _create_cactus_driver() -> webdriver.Chrome:
+def _driver() -> webdriver.Chrome:
     """Создает новый драйвер специально для Кактуса"""
     opts = Options()
     opts.add_argument("--headless=new")
@@ -29,6 +29,7 @@ def _create_cactus_driver() -> webdriver.Chrome:
     opts.add_argument("--disable-gpu")
     opts.add_argument("--disable-extensions")
     opts.add_argument("--disable-plugins")
+    # Ограничиваем использование памяти
     opts.add_argument("--memory-pressure-off")
     
     driver = webdriver.Chrome(options=opts)
@@ -70,7 +71,7 @@ def fetch_cactus_partners(
     categories_data: List[Dict[str, Any]] = []
 
     try:
-        driver = _create_cactus_driver()
+        driver = _driver()
         print("✅ Драйвер Кактуса успешно инициализирован")
 
         note = f"[bank {bank_id}] 🌵 Кактус - запуск парсера"
