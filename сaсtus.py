@@ -303,7 +303,7 @@ def _find_next_page_link(driver, page_num: int) -> Optional[str]:
         
         return None
     except Exception as e:
-        print(f"⚠️ Ошибка поиска ссылки пагинации: {e}")
+        print(f"Ошибка поиска ссылки пагинации: {e}")
         return None
 
 
