@@ -1,4 +1,3 @@
-#cactus
 import time
 import re
 import gc
@@ -11,7 +10,8 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import (
     TimeoutException, 
     WebDriverException, 
-    NoSuchElementException
+    NoSuchElementException,
+    StaleElementReferenceException
 )
 import urllib3
 
@@ -29,7 +29,6 @@ def _driver() -> webdriver.Chrome:
     opts.add_argument("--disable-gpu")
     opts.add_argument("--disable-extensions")
     opts.add_argument("--disable-plugins")
-    # Ограничиваем использование памяти
     opts.add_argument("--memory-pressure-off")
     
     driver = webdriver.Chrome(options=opts)
@@ -65,7 +64,6 @@ def fetch_cactus_partners(
     banks_total: int = 0,
 ) -> List[Dict[str, Any]]:
     """ОСНОВНАЯ ФУНКЦИЯ - создает свой драйвер и закрывает его в конце"""
-    
 
     driver = None
     categories_data: List[Dict[str, Any]] = []
@@ -129,7 +127,9 @@ def fetch_cactus_partners(
             if category_data:
                 categories_data.append(category_data)
 
-            _reset_category_filter(driver, category_value)
+            # Reset filter only if it was successfully applied
+            if category_data:
+                _reset_category_filter(driver, category_value)
             time.sleep(1)
 
         print(f"[bank {bank_id}] ✅ Кактус: обработано {len(categories_data)} категорий")
@@ -144,7 +144,6 @@ def fetch_cactus_partners(
     finally:
         print(f"[bank {bank_id}] Закрываем драйвер Кактуса")
         _cleanup_cactus_driver(driver)
-
 
 
 def _parse_categories(driver) -> List[Tuple[str, str]]:
@@ -222,41 +221,48 @@ def _process_category(
 
         # 1. Текущая страница (уже загружена)
         print("Страница (текущая после фильтра)")
-        all_partners.extend(_parse_page_partners(driver))
+        current_partners = _parse_page_partners(driver)
+        all_partners.extend(current_partners)
 
-        # 2. Собираем и обходим страницы пагинации
-        page_links = driver.find_elements(
-            By.CSS_SELECTOR, ".pagination__list a.pagination__page"
-        )
-        page_urls = []
-        for a in page_links:
-            href = a.get_attribute("href")
-            if href:
-                page_urls.append(href)
-
-        page_urls = list(dict.fromkeys(page_urls))  # уникализация
-
-        for url in page_urls:
-            print(f"Доп. страница: {url}")
+        # 2. Обход пагинации
+        page_num = 2
+        max_pages = 50  # защита от бесконечного цикла
+        
+        while page_num <= max_pages:
             try:
-                driver.set_page_load_timeout(25)  # таймаут на каждую страницу
-                driver.get(url)
-                time.sleep(2)
-                all_partners.extend(_parse_page_partners(driver))
-                print(f"Страница загружена: +{len(_parse_page_partners(driver))} партнёров")
-            except TimeoutException as e:
-                msg = f"Таймаут на странице {url}: {e}"
-                print(msg)
-                continue  # пропускаем страницу, но идём дальше
-            except WebDriverException as e:
-                msg = f"WebDriver ошибка на странице {url}: {e}"
-                print(msg)
-                continue
-            except Exception as e:
-                msg = f"Неожиданная ошибка на странице {url}: {e}"
-                print(msg)
-                continue
+                # Ищем ссылку на следующую страницу
+                next_page_link = _find_next_page_link(driver, page_num)
+                
+                if not next_page_link:
+                    print(f"Нет ссылки на страницу {page_num}, заканчиваем пагинацию")
+                    break
 
+                print(f"Переходим на страницу {page_num}...")
+                driver.set_page_load_timeout(25)
+                driver.get(next_page_link)
+                time.sleep(2)
+                
+                page_partners = _parse_page_partners(driver)
+                if not page_partners:
+                    print(f"На странице {page_num} нет партнёров, заканчиваем")
+                    break
+                    
+                all_partners.extend(page_partners)
+                print(f"Страница {page_num} загружена: +{len(page_partners)} партнёров")
+                page_num += 1
+                
+            except TimeoutException as e:
+                msg = f"Таймаут на странице {page_num}: {e}"
+                print(msg)
+                break
+            except WebDriverException as e:
+                msg = f"WebDriver ошибка на странице {page_num}: {e}"
+                print(msg)
+                break
+            except Exception as e:
+                msg = f"Неожиданная ошибка на странице {page_num}: {e}"
+                print(msg)
+                break
 
         if all_partners:
             save_partners(all_partners, bank_id, category_id)
@@ -277,12 +283,42 @@ def _process_category(
         return None
 
 
+def _find_next_page_link(driver, page_num: int) -> Optional[str]:
+    """Находит URL следующей страницы по номеру"""
+    try:
+        # Ищем все ссылки пагинации
+        pagination_links = driver.find_elements(
+            By.CSS_SELECTOR, ".pagination__list a.pagination__page"
+        )
+        
+        for link in pagination_links:
+            try:
+                link_text = link.text.strip()
+                if link_text == str(page_num):
+                    href = link.get_attribute("href")
+                    if href:
+                        return href
+            except StaleElementReferenceException:
+                continue
+        
+        return None
+    except Exception as e:
+        print(f"⚠️ Ошибка поиска ссылки пагинации: {e}")
+        return None
+
+
 def _apply_category_filter(driver, category_value: str) -> bool:
+    """Apply category filter with retry logic and improved error handling"""
     max_retries = 3
     checkbox_xpath = f"//input[@type='checkbox' and @value='{category_value}']"
 
     for attempt in range(1, max_retries + 1):
         try:
+            # Wait for checkbox to be present
+            WebDriverWait(driver, 10).until(
+                EC.presence_of_element_located((By.XPATH, checkbox_xpath))
+            )
+            
             checkbox = driver.find_element(By.XPATH, checkbox_xpath)
 
             if not checkbox.is_selected():
@@ -304,6 +340,9 @@ def _apply_category_filter(driver, category_value: str) -> bool:
             else:
                 print(f"❌ Не удалось загрузить партнёров после {max_retries} попыток")
                 return False
+        except NoSuchElementException:
+            print(f"❌ Чекбокс с value='{category_value}' не найден на странице")
+            return False
         except Exception as e:
             print(f"❌ Ошибка при активации фильтра: {e}")
             return False
@@ -312,12 +351,20 @@ def _apply_category_filter(driver, category_value: str) -> bool:
 
 
 def _reset_category_filter(driver, category_value: str) -> None:
+    """Reset filter only if element exists"""
     if not category_value:
         return
 
     try:
         checkbox_xpath = f"//input[@type='checkbox' and @value='{category_value}']"
-        checkbox = driver.find_element(By.XPATH, checkbox_xpath)
+        
+        # Check if element exists before trying to interact with it
+        checkboxes = driver.find_elements(By.XPATH, checkbox_xpath)
+        if not checkboxes:
+            print(f"⚠️ Чекбокс для сброса не найден: {category_value}")
+            return
+        
+        checkbox = checkboxes[0]
 
         if checkbox.is_selected():
             driver.execute_script("arguments[0].scrollIntoView({block:'center'});", checkbox)
@@ -330,6 +377,7 @@ def _reset_category_filter(driver, category_value: str) -> None:
 
 
 def _parse_page_partners(driver) -> List[Dict[str, Any]]:
+    """Парсит партнёров со страницы"""
     partners: List[Dict[str, Any]] = []
 
     try:
@@ -339,14 +387,15 @@ def _parse_page_partners(driver) -> List[Dict[str, Any]]:
         time.sleep(2)
 
         cards = driver.find_elements(By.CSS_SELECTOR, ".about-banners__item")
-        print(f"  🔍 Найдено карточек: {len(cards)}")
+        print(f"  📄 Найдено карточек: {len(cards)}")
 
         if not cards:
-            print("  ⚠️ Карточки не найдены - возможно неверный селектор")
+            print("  ⚠️ Карточки не найдены")
             return partners
 
         for idx, card in enumerate(cards, 1):
             try:
+                # Парсим название
                 try:
                     title_elem = card.find_element(By.CSS_SELECTOR, ".subpage-banner__title")
                     name = title_elem.text.strip()
@@ -357,17 +406,20 @@ def _parse_page_partners(driver) -> List[Dict[str, Any]]:
                 if not name:
                     continue
 
+                # Парсим бонус
                 bonus = None
                 try:
                     text_elem = card.find_element(By.CSS_SELECTOR, ".subpage-banner__text")
                     bonus_text = text_elem.text.strip()
-                    match = re.search(r"(\d+(?:[.,]\d+)?\s*%)", bonus_text)
+                    # Ищем процент (1%, 1.5%, 10%, и т.д.)
+                    match = re.search(r"(\d+(?:[.,]\d+)?)\s*%", bonus_text)
 
                     if match:
                         bonus = match.group(1).replace(",", ".")
                 except NoSuchElementException:
                     pass
 
+                # Парсим ссылку
                 link = ""
                 try:
                     link_elem = card.find_element(By.CSS_SELECTOR, ".subpage-banner__link")
