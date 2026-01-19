@@ -340,13 +340,28 @@ def save_partners(partners: List[Dict[str, Any]], bank_id: int, category_id: int
 
             last = cur.fetchone()
 
-            # Изменилось? → сохраняем
+            
+
+
             if last is None:# or last[0] != bonus or last[1] != link:
                 status = "new"
                 cur.execute("""
                     INSERT INTO partners (bank_id, category_id, partner_name, partner_bonus, partner_link, checked_at, status)
                     VALUES (?, ?, ?, ?, ?, ?, ?)
                 """, (bank_id, category_id, name, bonus, link, checked_at, status))
+
+
+            # Изменилось? → сохраняем
+            else:
+                ex_bank_id, ex_category_id, ex_name, ex_bonus = last
+                if ex_bank_id == bank_id and ex_category_id == category_id and ex_name == name and ex_bonus != bonus:
+                    status = "live"
+                    cur.execute("""
+                        INSERT INTO partners (bank_id, category_id, partner_name, partner_bonus, partner_link, checked_at, status)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """, (bank_id, category_id, name, bonus, link, checked_at, status))
+
+
 
 
         placeholders = ",".join("?" for _ in current_names)

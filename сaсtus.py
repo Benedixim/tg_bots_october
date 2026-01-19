@@ -30,9 +30,22 @@ def _driver() -> webdriver.Chrome:
     opts.add_argument("--disable-extensions")
     opts.add_argument("--disable-plugins")
     opts.add_argument("--memory-pressure-off")
+    # Оптимизация для медленных сетей
+    opts.add_argument("--disable-sync")
+    opts.add_argument("--disable-background-networking")
+    opts.add_argument("--disable-default-apps")
+    opts.add_argument("--disable-preconnect")
+    # Снижаем нагрузку на систему
+    opts.add_argument("--disable-background-timer-throttling")
+    opts.add_argument("--disable-renderer-backgrounding")
+    opts.add_argument("--disable-backgrounding-occluded-windows")
+    # Ограничение ресурсов
+    opts.add_argument("--blink-settings=imagesEnabled=false")  # Отключаем изображения
     
     driver = webdriver.Chrome(options=opts)
-    driver.set_page_load_timeout(30)
+    # Увеличиваем timeout
+    driver.set_page_load_timeout(60)
+    driver.set_script_timeout(60)
     return driver
 
 def _cleanup_cactus_driver(driver: webdriver.Chrome):
@@ -67,6 +80,9 @@ def fetch_cactus_partners(
 
     driver = None
     categories_data: List[Dict[str, Any]] = []
+    
+    # Даём время другим процессам перед запуском
+    time.sleep(2)
 
     try:
         driver = _driver()
@@ -77,17 +93,28 @@ def fetch_cactus_partners(
         if progress:
             progress(banks_done, banks_total, note)
 
-        # Загрузка страницы
+        # Загрузка страницы - отключаем таймаут page_load, будем ждать элементов
+        driver.set_page_load_timeout(5)  # Минимальный таймаут для инициализации
         try:
             driver.get(BASE_URL)
-        except TimeoutException as e:
-            msg = f"[bank {bank_id}] Таймаут при загрузке {BASE_URL}: {e}"
+        except TimeoutException:
+            # Page load timeout - нормально, продолжаем
+            print(f"⏱️ Page load timeout (ожидается), ждём элементов...")
+        except (WebDriverException, urllib3.exceptions.ReadTimeoutError, TimeoutError) as e:
+            msg = f"[bank {bank_id}] ❌ Ошибка при загрузке {BASE_URL}: {e}"
             print(msg)
             if progress:
                 progress(banks_done, banks_total, msg)
             return []
-        except (WebDriverException, urllib3.exceptions.ReadTimeoutError, TimeoutError) as e:
-            msg = f"[bank {bank_id}] ❌ Ошибка при загрузке {BASE_URL}: {e}"
+        
+        # Активно ждём, пока появятся элементы страницы
+        try:
+            WebDriverWait(driver, 30).until(
+                EC.presence_of_element_located((By.CSS_SELECTOR, ".checkboxs.js-bind-checkboxes"))
+            )
+            print("✅ Страница загружена (категории найдены)")
+        except TimeoutException:
+            msg = f"[bank {bank_id}] ❌ Категории не загрузились"
             print(msg)
             if progress:
                 progress(banks_done, banks_total, msg)
@@ -130,7 +157,7 @@ def fetch_cactus_partners(
             # Reset filter only if it was successfully applied
             if category_data:
                 _reset_category_filter(driver, category_value)
-            time.sleep(1)
+            time.sleep(1)  # Пауза между категориями для разгрузки
 
         print(f"[bank {bank_id}] ✅ Кактус: обработано {len(categories_data)} категорий")
         return categories_data
