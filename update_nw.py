@@ -431,6 +431,8 @@ def update_all_banks_categories(progress: ProgressFn = None) -> None:
     
     try:
         for bank_id in bank_ids:
+            if bank_id == 13:
+                continue
             if progress:
                 progress(done, total, f"[bank {bank_id}] ▶️ Старт парсинга банка")
 
