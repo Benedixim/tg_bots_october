@@ -210,6 +210,7 @@ def fetch_categories_for_bank(
             except TimeoutException:
                 warn = f"{cat_prefix} ⚠️ URL не изменился"
                 print(warn)
+                continue
 
             time.sleep(3)
             category_url = driver.current_url
@@ -282,6 +283,7 @@ def fetch_categories_for_bank(
             except TimeoutException:
                 warn = f"{cat_prefix} ⚠️ После сброса не появился контейнер категорий"
                 print(warn)
+                continue
 
         return categories
 
@@ -312,8 +314,13 @@ def _parse_partners(
             f"{cat_prefix} ▶️ Раскрываем список партнёров",
         )
 
-    while True:
+    max_clicks = 20
+    clicks = 0
+
+    while clicks < max_clicks:
         try:
+
+            time.sleep(2)
             btn = WebDriverWait(driver, 5).until(
                 EC.element_to_be_clickable(
                     (By.XPATH, f"//button[contains(., '{pcfg['button_more']}')]")
@@ -321,6 +328,8 @@ def _parse_partners(
             )
             print("Нашёл кнопку:", btn.text)
             driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", btn)
+            btn.click()
+            clicks += 1
             try:
                 btn.click()
             except (ElementClickInterceptedException, StaleElementReferenceException):
@@ -334,6 +343,10 @@ def _parse_partners(
             msg = f"{cat_prefix} ❌ Ошибка при клике: {e}"
             print(msg)
             break
+    
+        
+    if clicks == max_clicks:
+        print(f"{cat_prefix} ⚠️ Превышен лимит кликов 'Показать ещё'")
 
     cards = driver.find_elements(By.CSS_SELECTOR, pcfg["partners_list"])
     msg_found = f"{cat_prefix} 🔍 Найдено партнёров: {len(cards)}"
@@ -420,7 +433,7 @@ def update_all_banks_categories(progress: ProgressFn = None) -> None:
         for bank_id in bank_ids:
             if progress:
                 progress(done, total, f"[bank {bank_id}] ▶️ Старт парсинга банка")
-            
+
             try:
                 fetch_categories_for_bank(
                     bank_id,
@@ -428,19 +441,13 @@ def update_all_banks_categories(progress: ProgressFn = None) -> None:
                     banks_done=done,
                     banks_total=total,
                 )
-                done += 1
-                
-                if progress:
-                    progress(done, total, f"[bank {bank_id}] ✅ Готово по банку")
-                    
             except Exception as e:
+                print(f"[bank {bank_id}] ❌ Ошибка банка: {e}")
+            finally:
                 done += 1
-                msg = f"[bank {bank_id}] ❌ Ошибка на уровне банка: {e}"
-                print(msg)
-                import traceback
-                traceback.print_exc()
                 if progress:
-                    progress(done, total, msg)
+                    progress(done, total, f"[bank {bank_id}] ⏭ Переход к следующему банку")
+
                     
     finally:
         _cleanup_driver()
