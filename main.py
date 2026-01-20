@@ -590,6 +590,10 @@ def nightly_scrape_loop():
             _send_db_backup(1784338004)
             update_all_banks_categories()
             print(f"[{dt.datetime.now():%Y-%m-%d %H:%M:%S}] ✅ Nightly update done")
+
+            print(dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "Nightly cactus update")
+            fetch_cactus_partners(bank_id=13, progress=None, banks_done=0, banks_total=1)
+            print(dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "Nightly update done")
         except Exception as e:
             print(f"[{dt.datetime.now():%Y-%m-%d %H:%M:%S}] ❌ Nightly update error: {e}")
 
@@ -630,6 +634,19 @@ def _run_manual_update_with_progress(chat_id: int):
         # 3) Запуск обновления с прогрессом
         tg_progress(0, 1, "Подготовка…")
         update_all_banks_categories(progress=tg_progress)
+
+        # 3.1) Кактус отдельно
+        tg_progress(0, 1, "Обновление Кактуса (МТБанк)...")
+        try:
+            fetch_cactus_partners(
+                bank_id=13,
+                progress=tg_progress,
+                banks_done=0,
+                banks_total=1,
+            )
+            tg_progress(1, 1, "Кактус обновлён")
+        except Exception as e:
+            tg_progress(1, 1, f"Ошибка Кактуса: {e}")
 
         # 4) Финальный штрих
         tg_progress(1, 1, "Готово ✅")

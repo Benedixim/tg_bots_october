@@ -333,26 +333,26 @@ def save_partners(partners: List[Dict[str, Any]], bank_id: int, category_id: int
             last = cur.fetchone()
 
             if last is None:
-                # Нет предыдущей записи - вставляем как новую
                 status = "new"
                 cur.execute("""
                     INSERT INTO partners (bank_id, category_id, partner_name, partner_bonus, partner_link, checked_at, status)
                     VALUES (?, ?, ?, ?, ?, ?, ?)
                 """, (bank_id, category_id, name, bonus, link, checked_at, status))
             else:
-                # Есть предыдущая запись
-                ex_bonus = last
-                
-                current_bonus = str(bonus).strip() if bonus else ""
-                previous_bonus = str(ex_bonus).strip() if ex_bonus else ""
-                
-                # Если бонус изменился - сохраняем как новую запись со статусом 'live'
+                # last: (bank_id, category_id, partner_name, partner_bonus, partner_link)
+                last_bonus = last[3]  # partner_bonus из БД
+
+                current_bonus = (str(bonus).strip() if bonus is not None else "")
+                previous_bonus = (str(last_bonus).strip() if last_bonus is not None else "")
+
+                # Если бонус изменился – вставляем новую запись
                 if current_bonus != previous_bonus:
                     status = "live"
                     cur.execute("""
                         INSERT INTO partners (bank_id, category_id, partner_name, partner_bonus, partner_link, checked_at, status)
                         VALUES (?, ?, ?, ?, ?, ?, ?)
                     """, (bank_id, category_id, name, bonus, link, checked_at, status))
+
 
 
         placeholders = ",".join("?" for _ in current_names)
