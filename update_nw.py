@@ -328,10 +328,10 @@ def _parse_partners(
             )
             print("Нашёл кнопку:", btn.text)
             driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", btn)
-            btn.click()
-            clicks += 1
+
             try:
                 btn.click()
+                clicks += 1
             except (ElementClickInterceptedException, StaleElementReferenceException):
                 driver.execute_script("arguments[0].click();", btn)
             time.sleep(2)
