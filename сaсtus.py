@@ -44,6 +44,7 @@ def _cleanup_cactus_driver(driver: webdriver.Chrome):
         pass
     gc.collect()
 
+
 def _click_cookie(driver: webdriver.Chrome, cookie_text: str) -> None:
     """Закрывает cookie окно"""
     if not cookie_text:
