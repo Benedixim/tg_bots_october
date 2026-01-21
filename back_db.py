@@ -311,6 +311,10 @@ def save_partners(partners: List[Dict[str, Any]], bank_id: int, category_id: int
         current_names: set[str] = set()
 
         for p in partners:
+            
+            bank = p.get("bank_id")
+            category = p.get("category_id")
+            
 
             bonus = p.get("partner_bonus")
             link = p.get("partner_link")
@@ -329,7 +333,7 @@ def save_partners(partners: List[Dict[str, Any]], bank_id: int, category_id: int
 
             # Проверяем последнюю запись
             cur.execute("""
-                SELECT partner_bonus, partner_link
+                SELECT partner_bonus, partner_link, bank_id, category_id, partner_name
                 FROM partners
                 WHERE bank_id=? AND category_id=? AND partner_name=? 
                         AND COALESCE(NULLIF(TRIM(partner_bonus),''),'') = COALESCE(NULLIF(TRIM(?),''),'')
@@ -350,6 +354,23 @@ def save_partners(partners: List[Dict[str, Any]], bank_id: int, category_id: int
                     INSERT INTO partners (bank_id, category_id, partner_name, partner_bonus, partner_link, checked_at, status)
                     VALUES (?, ?, ?, ?, ?, ?, ?)
                 """, (bank_id, category_id, name, bonus, link, checked_at, status))
+
+            else:
+                if last[1] == link and last[2] == bank and last[3] == category and last[4] == name:
+                    cur.execute(
+                        """
+                        UPDATE partners
+                        SET partner_bonus = ?,
+                            checked_at = ?
+                        WHERE bank_id = ?
+                        AND category_id = ?
+                        AND partner_name = ?
+                        AND partner_link = ?
+                        AND status = 'live'
+                        """,
+                        (bonus, checked_at, bank_id, category_id, name, link)
+                    )
+
 
 
 
