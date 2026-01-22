@@ -308,6 +308,14 @@ def save_partners(partners: List[Dict[str, Any]], bank_id: int, category_id: int
               AND status IN ('new', 'live')
         """, (bank_id, category_id))
 
+        # проверка - партнер точно ли удален партнер status -> delete
+        cur.execute("""
+            UPDATE partners
+            SET status = 'delete', checked_at = ?
+            WHERE bank_id = ? AND category_id = ?
+              AND status = 'new_delete'
+        """, (checked_at, bank_id, category_id))
+
         current_names: set[str] = set()
 
         for p in partners:
@@ -333,7 +341,7 @@ def save_partners(partners: List[Dict[str, Any]], bank_id: int, category_id: int
 
             # Проверяем последнюю запись
             cur.execute("""
-                SELECT partner_bonus, partner_link, bank_id, category_id, partner_name
+                SELECT partner_bonus, partner_link, bank_id, category_id, partner_name, id
                 FROM partners
                 WHERE bank_id=? AND category_id=? AND partner_name=? 
                         AND COALESCE(NULLIF(TRIM(partner_bonus),''),'') = COALESCE(NULLIF(TRIM(?),''),'')
@@ -347,28 +355,45 @@ def save_partners(partners: List[Dict[str, Any]], bank_id: int, category_id: int
             # Изменилось? → сохраняем
             
 
-
+            
             if last is None:# or last[0] != bonus or last[1] != link:
-                status = "new"
+                status = "new" #новая
                 cur.execute("""
                     INSERT INTO partners (bank_id, category_id, partner_name, partner_bonus, partner_link, checked_at, status)
                     VALUES (?, ?, ?, ?, ?, ?, ?)
                 """, (bank_id, category_id, name, bonus, link, checked_at, status))
 
             else:
-                if last[1] == link and last[2] == bank and last[3] == category and last[4] == name:
+
+                cur.execute("""
+                SELECT partner_bonus, partner_link, bank_id, category_id, partner_name, id
+                FROM partners
+                WHERE bank_id=? AND category_id=? AND partner_name=? 
+                        AND COALESCE(NULLIF(TRIM(partner_link),''),'') = COALESCE(NULLIF(TRIM(?),''),'')
+                ORDER BY checked_at DESC
+                LIMIT 1
+                """, (bank_id, category_id, name, link))
+
+                previous  = cur.fetchone()
+
+                if previous is not None:# другой бонус
                     cur.execute(
                         """
                         UPDATE partners
                         SET partner_bonus = ?,
-                            checked_at = ?
-                        WHERE bank_id = ?
-                        AND category_id = ?
-                        AND partner_name = ?
-                        AND partner_link = ?
-                        AND status = 'live'
+                            checked_at = ?, status = 'live'
+                        WHERE id = ?
                         """,
-                        (bonus, checked_at, bank_id, category_id, name, link)
+                        (bonus, checked_at, previous[5])
+                    )
+                else: # та же запись
+                    cur.execute(#ready
+                        """
+                        UPDATE partners
+                        SET status = 'live'
+                        WHERE id = ?
+                        """,
+                        (last[5],)
                     )
 
 
@@ -379,29 +404,15 @@ def save_partners(partners: List[Dict[str, Any]], bank_id: int, category_id: int
         base_params = [checked_at, bank_id, category_id, *current_names]
 
         # проверка на удаление партнера status -> new_delete
-        cur.execute(f"""
-            UPDATE partners
-            SET status = 'new_delete', checked_at = ?
-            WHERE bank_id = ? AND category_id = ?
-              AND partner_name NOT IN ({placeholders})
-              AND status = 'ready'
-        """, base_params)
+        if current_names:
+            cur.execute(f"""
+                UPDATE partners
+                SET status = 'new_delete', checked_at = ?
+                WHERE bank_id = ? AND category_id = ?
+                AND partner_name NOT IN ({placeholders})
+                AND status = 'ready'
+            """, base_params)
 
-        # проверка - партнер точно ли удален партнер status -> delete
-        cur.execute(f"""
-            UPDATE partners
-            SET status = 'delete', checked_at = ?
-            WHERE bank_id = ? AND category_id = ?
-              AND status = 'new_delete'
-              AND partner_name NOT IN ({placeholders})
-        """, base_params)
-
-        cur.execute("""
-            UPDATE partners
-            SET status = 'live'
-            WHERE bank_id = ? AND category_id = ?
-              AND status = 'ready'
-        """, (bank_id, category_id))
 
         conn.commit()
     finally:
