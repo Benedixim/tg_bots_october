@@ -364,7 +364,7 @@ def save_partners(partners: List[Dict[str, Any]], bank_id: int, category_id: int
                 """, (bank_id, category_id, name, bonus, link, checked_at, status))
 
             else:
-
+                # есть ли партнер по такой же ссылке?
                 cur.execute("""
                 SELECT partner_bonus, partner_link, bank_id, category_id, partner_name, id
                 FROM partners
@@ -376,7 +376,8 @@ def save_partners(partners: List[Dict[str, Any]], bank_id: int, category_id: int
 
                 previous  = cur.fetchone()
 
-                if previous is not None:# другой бонус
+                # если бонус другой
+                if previous[0] != bonus:# другой бонус # неправильная проверка
                     cur.execute(
                         """
                         UPDATE partners
@@ -404,12 +405,13 @@ def save_partners(partners: List[Dict[str, Any]], bank_id: int, category_id: int
         base_params = [checked_at, bank_id, category_id, *current_names]
 
         # проверка на удаление партнера status -> new_delete
+
+        # убрать массив
         if current_names:
             cur.execute(f"""
                 UPDATE partners
                 SET status = 'new_delete', checked_at = ?
                 WHERE bank_id = ? AND category_id = ?
-                AND partner_name NOT IN ({placeholders})
                 AND status = 'ready'
             """, base_params)
 
