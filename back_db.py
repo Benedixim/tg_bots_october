@@ -407,13 +407,13 @@ def save_partners(partners: List[Dict[str, Any]], bank_id: int, category_id: int
         # проверка на удаление партнера status -> new_delete
 
         # убрать массив
-        if current_names:
-            cur.execute(f"""
-                UPDATE partners
-                SET status = 'new_delete', checked_at = ?
-                WHERE bank_id = ? AND category_id = ?
-                AND status = 'ready'
-            """, base_params)
+
+        cur.execute(f"""
+            UPDATE partners
+            SET status = 'new_delete', checked_at = ?
+            WHERE bank_id = ? AND category_id = ?
+            AND status = 'ready'
+        """, (checked_at, bank_id, category_id))
 
 
         conn.commit()
