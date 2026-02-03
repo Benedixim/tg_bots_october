@@ -4,7 +4,7 @@ import sqlite3
 import datetime
 from typing import Any, Dict, List, Tuple, Optional
 
-DB_PATH = "banks_backup_20260127_063210.db"
+DB_PATH = "banks_backup_20260203_062845.db"
 
 
 def _conn() -> sqlite3.Connection:
@@ -346,6 +346,7 @@ def save_partners(partners: List[Dict[str, Any]], bank_id: int, category_id: int
                 WHERE bank_id=? AND category_id=? AND partner_name=? 
                         AND COALESCE(NULLIF(TRIM(partner_bonus),''),'') = COALESCE(NULLIF(TRIM(?),''),'')
                         AND COALESCE(NULLIF(TRIM(partner_link),''),'') = COALESCE(NULLIF(TRIM(?),''),'')
+                        AND status = 'ready'
                 ORDER BY checked_at DESC
                 LIMIT 1
             """, (bank_id, category_id, name, bonus, link))
@@ -370,6 +371,7 @@ def save_partners(partners: List[Dict[str, Any]], bank_id: int, category_id: int
                 FROM partners
                 WHERE bank_id=? AND category_id=? AND partner_name=? 
                         AND COALESCE(NULLIF(TRIM(partner_link),''),'') = COALESCE(NULLIF(TRIM(?),''),'')
+                        AND status = 'ready'
                 ORDER BY checked_at DESC
                 LIMIT 1
                 """, (bank_id, category_id, name, link))
