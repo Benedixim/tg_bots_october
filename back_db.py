@@ -410,12 +410,19 @@ def save_partners(partners: List[Dict[str, Any]], bank_id: int, category_id: int
 
         # убрать массив
 
+        #cur.execute(f"""
+        #    UPDATE partners
+        #    SET status = 'new_delete', checked_at = ?
+        #    WHERE bank_id = ? AND category_id = ?
+        #    AND status = 'ready'
+        #""", (checked_at, bank_id, category_id))
+
         cur.execute(f"""
             UPDATE partners
-            SET status = 'new_delete', checked_at = ?
+            SET status = 'new_delete'
             WHERE bank_id = ? AND category_id = ?
             AND status = 'ready'
-        """, (checked_at, bank_id, category_id))
+        """, (bank_id, category_id))
 
 
         conn.commit()
