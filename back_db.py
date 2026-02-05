@@ -311,10 +311,10 @@ def save_partners(partners: List[Dict[str, Any]], bank_id: int, category_id: int
         # проверка - партнер точно ли удален партнер status -> delete
         cur.execute("""
             UPDATE partners
-            SET status = 'delete', checked_at = ?
+            SET status = 'delete'
             WHERE bank_id = ? AND category_id = ?
               AND status = 'new_delete'
-        """, (checked_at, bank_id, category_id))
+        """, (bank_id, category_id))
 
         current_names: set[str] = set()
 
