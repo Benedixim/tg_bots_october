@@ -179,7 +179,7 @@ def fetch_categories_for_bank(
             label_xpath = f"//{el_tag}[normalize-space(text())='{category_name}']"
 
             try:
-                label = WebDriverWait(driver, 10).until(
+                label = WebDriverWait(driver, 30).until(
                     EC.element_to_be_clickable((By.XPATH, label_xpath))
                 )
             except TimeoutException:
