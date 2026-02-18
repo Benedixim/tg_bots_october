@@ -792,7 +792,7 @@ def format_changes_message(changes: list[dict]) -> str:
                 change_type = p.get("change_type", "updated")
                 if change_type == "new":
                     emoji = "✅"
-                elif change_type == "delete":
+                elif change_type == "new_delete":
                     emoji = "❌"
                 else:
                     emoji = "🔁"
