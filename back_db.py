@@ -758,3 +758,77 @@ def get_all_chat_ids() -> List[int]:
         return [row[0] for row in cur.fetchall()]
     finally:
         conn.close()
+
+# логтрование входа пользователя для отслеживания активных
+def ensure_log_table() -> None:
+    conn = _conn()
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                entered_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                action TEXT
+            );
+        """)
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def log_user_start(user_id: int) -> None:
+    """
+    Записывает факт нажатия /start пользователем: его user_id и текущее время.
+    Каждый вызов добавляет новую строку (история всех входов сохраняется).
+    """
+    ensure_log_table()
+    conn = _conn()
+    try:
+        cur = conn.cursor()
+        entered_at = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        cur.execute(
+            "INSERT INTO log (user_id, entered_at) VALUES (?, ?);",
+            (user_id, entered_at)
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+def log_user_action(user_id: int, action: str) -> None:
+    """
+    Записывает действие пользователя в таблицу log.
+    action — название действия (например, 'выбрать_банк', 'построить_график', 'найти_партнера')
+    """
+    ensure_log_table()
+    conn = _conn()
+    try:
+        cur = conn.cursor()
+        # Добавляем колонку action, если её ещё нет (миграция)
+        try:
+            cur.execute("ALTER TABLE log ADD COLUMN action TEXT;")
+            conn.commit()
+        except sqlite3.OperationalError:
+            pass  # колонка уже существует
+        entered_at = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        cur.execute(
+            "INSERT INTO log (user_id, entered_at, action) VALUES (?, ?, ?);",
+            (user_id, entered_at, action)
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+def get_start_log() -> List[Tuple[int, int, str]]:
+    """
+    Возвращает все записи из таблицы log:
+    [(id, user_id, entered_at), ...]
+    """
+    ensure_log_table()
+    conn = _conn()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT id, user_id, entered_at FROM log ORDER BY entered_at DESC;")
+        return cur.fetchall()
+    finally:
+        conn.close()

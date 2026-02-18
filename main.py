@@ -37,6 +37,8 @@ from back_db import (
     get_categories,
     get_banks_name,
     debug_show_akv,
+    log_user_start,
+    log_user_action,
 )
 
 from update_nw import update_all_banks_categories
@@ -116,6 +118,7 @@ def plot_partners_by_bank(bank_id: int) -> str:
 # ---------- Bot Handlers ----------
 @bot.message_handler(func=lambda message: message.text == "🏦 Выбрать банк")
 def start_message(message):
+    log_user_action(message.from_user.id, "выбрать_банк")
     remember_user(message.chat.id) # запоминаем
     banks = get_banks()
     if not banks:
@@ -213,6 +216,7 @@ def add_buttons_to_all_users(message):
 @bot.message_handler(commands=['start', 'menu'])
 def handle_start(message):
     send_main_menu(bot, message.chat.id)
+    log_user_start(message.from_user.id)
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('bank_'))
 def callback_bank(call):
@@ -490,7 +494,7 @@ def graph_start(message):
 
 @bot.message_handler(func=lambda message: message.text == "📊 Построить график")
 def graph_start(message):
-
+    log_user_action(message.from_user.id, "построить_график")
     remember_user(message.chat.id) # запоминаем
     banks = get_banks()
     if not banks:
@@ -519,6 +523,7 @@ def callback_graphbank(call):
 
 @bot.message_handler(func=lambda message: message.text == "🔍 Найти партнёра")
 def search_command(message):
+    log_user_action(message.from_user.id, "найти_партнера")
     remember_user(message.chat.id) # запоминаем
     msg = bot.send_message(message.chat.id, "Введите имя партнёра для поиска:")
     bot.register_next_step_handler(msg, perform_search)
