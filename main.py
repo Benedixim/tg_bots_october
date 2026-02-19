@@ -1272,7 +1272,7 @@ def home():
 
 
 async def keep_alive():
-    url = os.getenv("KEEPALIVE_URL", "https://tg-bots-october-6s6d.onrender.com")
+    url = os.getenv("KEEPALIVE_URL", "https://partners-bot.onrender.com")
     while True:
         try:
             async with ClientSession() as session:
