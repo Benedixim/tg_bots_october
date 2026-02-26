@@ -135,9 +135,9 @@ def fetch_categories_for_bank(
         driver.get(url)
         
         # Очищаем кеш браузера периодически
-        if banks_done % 5 == 0:
-            driver.execute_script("window.localStorage.clear();")
-            driver.execute_script("window.sessionStorage.clear();")
+        #if banks_done % 5 == 0:
+        #    driver.execute_script("window.localStorage.clear();")
+        #    driver.execute_script("window.sessionStorage.clear();")
 
         _click_cookie(driver, cfg.get("cookie_text", ""))
 
