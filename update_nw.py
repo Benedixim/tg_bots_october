@@ -38,38 +38,39 @@ PARSER_REGISTRY = {
 }
 
 # Глобальный драйвер для переиспользования
-_global_driver = None
+#_global_driver = None
 
 def _get_driver() -> webdriver.Chrome:
     """Переиспользуем драйвер для снижения утечек памяти"""
-    global _global_driver
+    #global _global_driver
     
-    if _global_driver is None:
-        opts = Options()
-        opts.add_argument("--headless=new")
-        opts.add_argument("--no-sandbox")
-        opts.add_argument("--disable-dev-shm-usage")
-        opts.add_argument("--window-size=1920,1080")
-        opts.add_argument("--disable-gpu")
-        opts.add_argument("--disable-extensions")
-        opts.add_argument("--disable-plugins")
+    #if _global_driver is None:
+    opts = Options()
+    opts.add_argument("--headless=new")
+    opts.add_argument("--no-sandbox")
+    opts.add_argument("--disable-dev-shm-usage")
+    opts.add_argument("--window-size=1920,1080")
+        #opts.add_argument("--disable-gpu")
+        #opts.add_argument("--disable-extensions")
+        #opts.add_argument("--disable-plugins")
         # Ограничиваем использование памяти
-        opts.add_argument("--memory-pressure-off")
+        #opts.add_argument("--memory-pressure-off")
         
-        _global_driver = webdriver.Chrome(options=opts)
+    _global_driver = webdriver.Chrome(options=opts)
     
     return _global_driver
 
 def _cleanup_driver():
     """Очищаем глобальный драйвер"""
-    global _global_driver
-    try:
-        if _global_driver:
-            _global_driver.quit()
-            _global_driver = None
-    except:
-        pass
-    gc.collect()
+    a = 1
+    #global _global_driver
+    #try:
+    #    if _global_driver:
+    #        _global_driver.quit()
+    #        _global_driver = None
+    #except:
+    #    pass
+    #gc.collect()
 
 def _click_cookie(driver: webdriver.Chrome, cookie_text: str) -> None:
     if not cookie_text:
